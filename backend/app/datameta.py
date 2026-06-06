@@ -490,9 +490,13 @@ class DataMetaService:
     def _init_knowledge_repo(self) -> None:
         self.knowledge_repo.mkdir(parents=True, exist_ok=True)
         if not (self.knowledge_repo / ".git").exists():
-            self._git(["init"])
-            self._git(["config", "user.name", "DataMeta Seed"])
-            self._git(["config", "user.email", "seed@datameta.local"])
+            try:
+                self._git(["init"])
+                self._git(["config", "user.name", "DataMeta Seed"])
+                self._git(["config", "user.email", "seed@datameta.local"])
+            except RuntimeError:
+                if not os.environ.get("VERCEL"):
+                    raise
         seed_files = self._seed_markdown_files()
         changed = False
         for relative_path, content in seed_files.items():
@@ -502,7 +506,7 @@ class DataMetaService:
                 path.write_text(content, encoding="utf-8")
                 changed = True
         if changed:
-            self._git(["add", "."])
+            self._git(["add", "."], check=False)
             self._git_commit("Seed Shoppy knowledge base", "DataMeta Seed", "seed@datameta.local")
 
     def _seed_markdown_files(self) -> dict[str, str]:
@@ -617,15 +621,20 @@ Other teams may flag suspected issues, but resolution belongs to data-ownership.
         }
 
     def _git(self, args: list[str], *, check: bool = True, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
-            ["git", *args],
-            cwd=self.knowledge_repo,
-            check=check,
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=env,
-        )
+        try:
+            return subprocess.run(
+                ["git", *args],
+                cwd=self.knowledge_repo,
+                check=check,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+            )
+        except FileNotFoundError:
+            if check:
+                raise RuntimeError("git is not available in this runtime")
+            return subprocess.CompletedProcess(["git", *args], 127, "", "git is not available in this runtime")
 
     def _git_commit(self, message: str, author_name: str, author_email: str) -> str | None:
         env = os.environ.copy()
@@ -641,8 +650,13 @@ Other teams may flag suspected issues, but resolution belongs to data-ownership.
         if result.returncode != 0:
             if "nothing to commit" in result.stdout.lower() or "nothing to commit" in result.stderr.lower():
                 return None
+            if os.environ.get("VERCEL"):
+                return f"serverless-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
             raise RuntimeError(result.stderr or result.stdout)
-        return self._git(["rev-parse", "HEAD"]).stdout.strip()
+        rev_parse = self._git(["rev-parse", "HEAD"], check=False)
+        if rev_parse.returncode != 0:
+            return f"serverless-{datetime.now(UTC).strftime('%Y%m%d%H%M%S')}"
+        return rev_parse.stdout.strip()
 
     def parse_document(self, path: Path) -> dict[str, Any]:
         text = path.read_text(encoding="utf-8")

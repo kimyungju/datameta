@@ -138,6 +138,15 @@ class DataMetaServiceTest(unittest.TestCase):
         self.assertEqual(response.status_code, 202)
         self.assertEqual(response.content, b"")
 
+    def test_health_route_is_safe_for_deployment_smoke_tests(self) -> None:
+        with TestClient(app) as client:
+            root = client.get("/")
+            health = client.get("/api/health")
+        self.assertEqual(root.status_code, 200)
+        self.assertEqual(health.status_code, 200)
+        self.assertTrue(root.json()["ok"])
+        self.assertTrue(health.json()["ok"])
+
     def test_run_finance_arr_calculation(self) -> None:
         result = self.service.run_calculation("junior.analyst", "arr-finance-board", "subscriptions")
         self.assertTrue(result["ok"])

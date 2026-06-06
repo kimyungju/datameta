@@ -37,6 +37,20 @@ def startup() -> None:
     service.ensure_ready()
 
 
+@app.get("/")
+def root() -> dict[str, Any]:
+    return health()
+
+
+@app.get("/api/health")
+def health() -> dict[str, Any]:
+    try:
+        service.ensure_ready()
+        return {"ok": True, "project": "DataMeta", "runtime": "vercel" if os.environ.get("VERCEL") else "local"}
+    except Exception as error:
+        raise handle_error(error)
+
+
 class QuestionRequest(BaseModel):
     question: str
     user_id: str | None = None
