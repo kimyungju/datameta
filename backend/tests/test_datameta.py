@@ -5,8 +5,11 @@ import unittest
 from pathlib import Path
 import sys
 
+from fastapi.testclient import TestClient
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.datameta import DataMetaService
+from app.main import app, mcp_tools
 
 
 class DataMetaServiceTest(unittest.TestCase):
@@ -23,6 +26,45 @@ class DataMetaServiceTest(unittest.TestCase):
         teams = {definition["team"] for definition in result["definitions"]}
         self.assertTrue(result["requires_choice"])
         self.assertEqual({"finance", "renewals"}, teams)
+
+    def test_ask_answers_arr_definition_question(self) -> None:
+        result = self.service.ask("junior.analyst", "What is the definition of ARR?")
+        self.assertEqual(result["intent"], "answer")
+        self.assertEqual(result["action"], "datameta_answer")
+        self.assertIn("ARR definitions", result["answer"])
+        self.assertTrue(result["calculation_prompt"]["requires_choice"])
+
+    def test_ask_suspicious_data_prompt_requests_missing_detail(self) -> None:
+        result = self.service.ask("olivia.ops", "Data point seems suspicious")
+        self.assertEqual(result["intent"], "flag_outlier")
+        self.assertEqual(result["action"], "needs_more_detail")
+        self.assertTrue(result["needs_more_detail"])
+        self.assertIn("table_name", result["missing"])
+        self.assertIn("subject", result["missing"])
+        self.assertIn("description", result["missing"])
+
+    def test_ask_flags_detailed_suspicious_data_prompt(self) -> None:
+        result = self.service.ask(
+            "olivia.ops",
+            "orders ord_005 May 4 GMV spike looks suspicious because GMV is more than 10x the prior three days.",
+        )
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "datameta_flag_outlier")
+        self.assertEqual(result["flag"]["status"], "pending_owner_review")
+
+    def test_mcp_exposes_plain_language_ask_tool(self) -> None:
+        tools = {tool["name"]: tool for tool in mcp_tools()}
+        self.assertIn("datameta_ask", tools)
+        self.assertEqual(["question"], tools["datameta_ask"]["inputSchema"]["required"])
+
+    def test_mcp_initialized_notification_returns_accepted_without_body(self) -> None:
+        with TestClient(app) as client:
+            response = client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}},
+            )
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.content, b"")
 
     def test_run_finance_arr_calculation(self) -> None:
         result = self.service.run_calculation("junior.analyst", "arr-finance-board", "subscriptions")

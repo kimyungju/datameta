@@ -1008,6 +1008,99 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             "trace": retrieval["trace"],
         }
 
+    def ask(self, user_id: str | None, question: str, include_trace: bool = False) -> dict[str, Any]:
+        tokens = tokenize(question)
+        data_quality_tokens = {
+            "anomaly",
+            "bad",
+            "incorrect",
+            "issue",
+            "outlier",
+            "quality",
+            "spike",
+            "strange",
+            "suspicious",
+            "wrong",
+        }
+        if tokens & data_quality_tokens:
+            return self._triage_data_quality_question(user_id, question, include_trace)
+        answer = self.answer(user_id, question, include_trace)
+        return {"intent": "answer", "action": "datameta_answer", **answer}
+
+    def _triage_data_quality_question(self, user_id: str | None, question: str, include_trace: bool) -> dict[str, Any]:
+        user = self.get_user(user_id)
+        table_name = self._infer_table_from_text(question, user)
+        subject = self._infer_outlier_subject(question, table_name)
+        description = question.strip()
+        missing = []
+        if not table_name:
+            missing.append("table_name")
+        if not subject:
+            missing.append("subject")
+        if not self._has_specific_outlier_detail(question, table_name):
+            missing.append("description")
+        retrieval = self.retrieve(user.id, question, include_trace)
+        if missing:
+            return {
+                "intent": "flag_outlier",
+                "action": "needs_more_detail",
+                "ok": False,
+                "needs_more_detail": True,
+                "message": (
+                    "I can help flag this for data-owner review. "
+                    "Please provide the table or metric, what looks suspicious, and a short description."
+                ),
+                "missing": missing,
+                "available_tables": list(user.tables),
+                "example": "orders table, ord_005 May 4 GMV spike, GMV is more than 10x the prior three days.",
+                "citations": [packet["citation"] for packet in retrieval["packets"]],
+                "trace": retrieval["trace"],
+            }
+        flag = self.flag_outlier(user.id, table_name, subject, description)
+        return {
+            "intent": "flag_outlier",
+            "action": "datameta_flag_outlier",
+            "ok": True,
+            "message": "DataMeta flagged the suspicious data point for owner-team review.",
+            "flag": flag,
+            "citations": [packet["citation"] for packet in retrieval["packets"]],
+            "trace": retrieval["trace"],
+        }
+
+    def _infer_table_from_text(self, text: str, user: User) -> str | None:
+        normalized = text.lower()
+        for table in user.tables:
+            table_words = table.replace("_", " ")
+            if table in normalized or table_words in normalized:
+                return table
+        if {"order", "orders", "gmv", "refund", "marketplace"} & tokenize(text) and user.can_access_table("orders"):
+            return "orders"
+        if {"metric", "metrics", "daily"} & tokenize(text) and user.can_access_table("ops_daily_metrics"):
+            return "ops_daily_metrics"
+        if {"renewal", "renewals"} & tokenize(text) and user.can_access_table("renewals"):
+            return "renewals"
+        if {"subscription", "subscriptions", "mrr"} & tokenize(text) and user.can_access_table("subscriptions"):
+            return "subscriptions"
+        return None
+
+    def _infer_outlier_subject(self, text: str, table_name: str | None) -> str:
+        cleaned = re.sub(r"\s+", " ", text.strip()).rstrip(".")
+        if not cleaned:
+            return ""
+        vague_tokens = {"data", "datapoint", "point", "seems", "suspicious", "looks", "bad", "wrong"}
+        if tokenize(cleaned) <= vague_tokens:
+            return ""
+        if table_name and table_name.replace("_", " ") not in cleaned.lower():
+            return f"{table_name} issue: {cleaned[:70]}"
+        return cleaned[:90]
+
+    def _has_specific_outlier_detail(self, text: str, table_name: str | None) -> bool:
+        tokens = tokenize(text)
+        vague = tokens <= {"data", "datapoint", "point", "seems", "suspicious", "looks", "bad", "wrong"}
+        if vague:
+            return False
+        return bool(table_name and (len(tokens) >= 5 or re.search(r"\d", text)))
+
     def flag_outlier(
         self,
         user_id: str | None,
@@ -1227,6 +1320,7 @@ Resolution:
 
     def mcp_tool_names(self) -> list[str]:
         return [
+            "datameta_ask",
             "datameta_retrieve",
             "datameta_answer",
             "datameta_author_proposal",

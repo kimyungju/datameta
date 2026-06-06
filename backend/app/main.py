@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from fastapi import FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
@@ -110,6 +110,14 @@ def answer(request: QuestionRequest, x_user_id: str | None = Header(default=None
         raise handle_error(error)
 
 
+@app.post("/api/ask")
+def ask(request: QuestionRequest, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
+    try:
+        return service.ask(user_from_header(x_user_id, request.user_id), request.question, request.include_trace)
+    except Exception as error:
+        raise handle_error(error)
+
+
 @app.post("/api/author/proposal")
 def author_proposal(request: AuthorRequest, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
     try:
@@ -199,6 +207,24 @@ def history(path: str | None = None) -> dict[str, Any]:
 def mcp_tools() -> list[dict[str, Any]]:
     user_property = {"type": "string", "description": "Seeded DataMeta user id. Defaults to junior.analyst."}
     return [
+        {
+            "name": "datameta_ask",
+            "title": "Ask DataMeta",
+            "description": (
+                "Natural-language DataMeta entrypoint for Shoppy definitions, runbooks, data-quality concerns, "
+                "and calculation questions. Use this when the user asks in plain English."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "user_id": user_property,
+                    "include_trace": {"type": "boolean"},
+                },
+                "required": ["question"],
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
+        },
         {
             "name": "datameta_retrieve",
             "title": "Retrieve DataMeta Knowledge",
@@ -367,6 +393,8 @@ def json_dumps(payload: Any) -> str:
 
 
 def dispatch_tool(name: str, arguments: dict[str, Any]) -> Any:
+    if name == "datameta_ask":
+        return service.ask(arguments.get("user_id"), arguments["question"], bool(arguments.get("include_trace", False)))
     if name == "datameta_retrieve":
         return service.retrieve(arguments.get("user_id"), arguments["question"], bool(arguments.get("include_trace", False)))
     if name == "datameta_answer":
@@ -398,8 +426,8 @@ def dispatch_tool(name: str, arguments: dict[str, Any]) -> Any:
     raise ValueError(f"Unknown DataMeta tool: {name}")
 
 
-@app.post("/mcp")
-async def mcp(request: Request) -> dict[str, Any]:
+@app.post("/mcp", response_model=None)
+async def mcp(request: Request) -> dict[str, Any] | Response:
     expected_token = os.environ.get("DATAMETA_MCP_TOKEN")
     if expected_token:
         authorization = request.headers.get("authorization", "")
@@ -416,6 +444,7 @@ async def mcp(request: Request) -> dict[str, Any]:
                 "capabilities": {"tools": {"listChanged": False}},
                 "instructions": (
                     "Use DataMeta for Shoppy company definitions, runbooks, data-quality flags, and calculations. "
+                    "For plain-language user questions, call datameta_ask first. "
                     "Call datameta_prepare_calculation before calculating ARR so the analyst can choose Finance or Renewals. "
                     "Cite returned paths and commit hashes."
                 ),
@@ -427,7 +456,7 @@ async def mcp(request: Request) -> dict[str, Any]:
             payload = dispatch_tool(params["name"], params.get("arguments") or {})
             result = mcp_text_result(payload)
         elif method in {"notifications/initialized", "initialized"}:
-            return {}
+            return Response(status_code=202)
         else:
             return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": f"Unknown method {method}"}}
         return {"jsonrpc": "2.0", "id": request_id, "result": result}
