@@ -6,7 +6,6 @@ import re
 import shlex
 import sqlite3
 import subprocess
-import base64
 import hashlib
 import math
 import urllib.error
@@ -74,6 +73,12 @@ LOCAL_EMBEDDING_DIMENSIONS = 256
 def configured_env_value(name: str) -> str | None:
     value = os.environ.get(name, "").strip()
     return value or None
+
+
+def neo4j_database() -> str:
+    # Aura instances name the default database after the instance id (e.g. d1e35206),
+    # not "neo4j". Allow overriding via env, falling back to the classic default.
+    return configured_env_value("DATAMETA_NEO4J_DATABASE") or "neo4j"
 
 
 def model_config() -> dict[str, Any]:
@@ -381,6 +386,8 @@ class DataMetaService:
         self._multirepo_index: dict[str, Any] | None = None
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self._ready = False
+        self._neo4j_driver = None
+        self._neo4j_driver_key: tuple[str, str, str] | None = None
 
     def ensure_ready(self) -> None:
         if self._ready:
@@ -1155,29 +1162,336 @@ The measurement references incident inc-vendor-x-2026-05-20 and the public API e
             body="Customer-impact details are need-to-know. Cross-functional reviewers may access the affected customer records while the SLA review is open.",
         )
 
+        # --- Single-repo anchor docs ---------------------------------------
+        # Each of these is self-contained so a question about it resolves to a
+        # single repository, making the single-repo demo questions obvious.
+        add_doc(
+            "security-incident-response",
+            "incident-classification",
+            "severity-levels.md",
+            doc_id="incident-severity-levels",
+            doc_type="policy",
+            entity="Incident Severity Levels",
+            scope="severity_classification",
+            title="Incident Severity Levels",
+            summary="DataMeta classifies incidents from Sev-1 (critical, full outage) to Sev-4 (low), each with a target response and update cadence.",
+            incidents="inc-vendor-x-2026-05-20",
+            tags="severity,Sev-1,Sev-2,Sev-3,Sev-4,classification,response time",
+            body="""
+## Severity Matrix
+
+- **Sev-1 - Critical:** Full production outage or a confirmed data breach. Page the on-call commander immediately. Customer updates every 30 minutes.
+- **Sev-2 - Major:** Significant degradation, or a single large customer impacted. Respond within 30 minutes. Updates every hour.
+- **Sev-3 - Minor:** Limited or intermittent impact with a workaround. Respond within four business hours.
+- **Sev-4 - Low:** Cosmetic or internal-only issue. Handle during normal working hours.
+
+The Vendor X outage on 2026-05-20 was declared Sev-2 because it degraded production availability for a single enterprise customer.
+""",
+        )
+        add_doc(
+            "legal-contracts",
+            "sla-policy",
+            "service-credit-schedule.md",
+            doc_id="service-credit-schedule",
+            doc_type="policy",
+            entity="Service Credit Schedule",
+            scope="availability_sla",
+            title="Service Credit Schedule",
+            summary="The standard availability service-credit schedule: a 10 percent credit below 99.90 percent, and 25 percent below 99.00 percent.",
+            customers="Customer A,Customer B,Customer C",
+            slas="availability-sla",
+            tags="service credit,schedule,availability,10 percent,25 percent",
+            body="""
+## Standard Service Credit Schedule
+
+| Monthly production API availability | Service credit |
+| --- | --- |
+| Below 99.90% and at or above 99.00% | 10% of the monthly platform fee |
+| Below 99.00% | 25% of the monthly platform fee |
+
+Credits apply to the affected month's platform fee. Legal approves the contractual interpretation and Finance approves the amount before any credit is offered to a customer.
+""",
+        )
+        add_doc(
+            "data-governance",
+            "retention",
+            "evidence-retention.md",
+            doc_id="evidence-retention",
+            doc_type="policy",
+            entity="Incident Evidence Retention",
+            scope="retention",
+            title="Incident Evidence Retention",
+            summary="Incident and SLA evidence is retained for seven years; an active legal hold suspends deletion until it is released in writing.",
+            tags="retention,legal hold,evidence,seven years",
+            body="""
+## Retention Periods
+
+- Incident records, postmortems, and availability evidence: **7 years**.
+- Customer notices and service-credit approvals: **7 years**.
+- Routine operational logs: **13 months**.
+
+## Legal Hold
+
+When Legal places a hold on a case, all related records are preserved and exempt from scheduled deletion until the hold is released in writing.
+""",
+        )
+        add_doc(
+            "vendor-risk-management",
+            "risk-registers",
+            "vendor-tiering.md",
+            doc_id="vendor-tiering",
+            doc_type="policy",
+            entity="Vendor Tiering",
+            scope="vendor_tiering",
+            title="Vendor Tiering",
+            summary="Vendors are tiered 1 to 3 by how critical they are to production. Vendor X is Tier 1 (critical); Vendor Y is Tier 3.",
+            vendors="Vendor X,Vendor Y",
+            tags="vendor tiering,Tier 1,Tier 3,Vendor X,Vendor Y,critical",
+            body="""
+## Tiers
+
+- **Tier 1 - Critical:** An outage of this vendor directly degrades customer availability. Reviewed quarterly. **Vendor X** is Tier 1.
+- **Tier 2 - Important:** Supports production but has a fallback. Reviewed twice a year.
+- **Tier 3 - Standard:** Internal or non-production tooling. Reviewed annually. **Vendor Y** is Tier 3.
+
+Tier 1 vendors must provide a root-cause analysis within five business days of any incident.
+""",
+        )
+        add_doc(
+            "platform-operations",
+            "slo-measurement",
+            "availability-slo.md",
+            doc_id="availability-slo",
+            doc_type="policy",
+            entity="Availability SLO Measurement",
+            scope="slo_measurement",
+            title="Availability SLO Measurement",
+            summary="Customer availability is measured monthly as available production API minutes over total minutes, targeting 99.90 percent.",
+            customers="Customer A,Customer B,Customer C",
+            slas="availability-sla",
+            tags="SLO,availability,measurement,99.90 percent,uptime",
+            body="""
+## How We Measure
+
+Monthly availability = (total production API minutes - unavailable minutes) / total minutes, calculated per customer.
+
+The internal SLO target is **99.90%**. Approved maintenance windows are excluded; third-party vendor outages are excluded only when the vendor is an approved excluded dependency for that customer.
+
+Measurements are the system of record for any SLA review and are stored in the availability evidence table.
+""",
+        )
+        add_doc(
+            "customer-success-ops",
+            "customer-a",
+            "customer-a-account-profile.md",
+            doc_id="customer-a-account-profile",
+            doc_type="profile",
+            entity="Customer A Account Profile",
+            scope="account_profile",
+            title="Customer A Account Profile",
+            summary="Customer A is a Tier 1 enterprise account owned by relationship manager Morgan Lee, on the 99.90 percent availability plan.",
+            customers="Customer A",
+            tags="Customer A,account profile,relationship owner,Morgan Lee,Tier 1",
+            body="""
+## Account Profile
+
+- **Account tier:** Tier 1 enterprise
+- **Relationship owner:** Morgan Lee, Senior Customer Success Manager
+- **Executive sponsor:** VP of Customer Success
+- **Availability plan:** 99.90% monthly production API
+- **Primary contact:** Customer A IT Operations
+
+Escalations for Customer A route first to Morgan Lee, then to the executive sponsor.
+""",
+        )
+
+        # --- Multi-repo storyline: Vendor X outage on 2026-05-20 -----------
+        # These docs live in different repos but all tie to the same incident,
+        # so the multi-repo demo question pulls a traceable chain of evidence.
+        add_doc(
+            "platform-operations",
+            "incidents",
+            "vendor-x-outage-2026-05-20.md",
+            doc_id="vendor-x-outage-2026-05-20",
+            doc_type="incident",
+            entity="Vendor X Outage 2026-05-20",
+            scope="availability_incident",
+            title="Vendor X Outage 2026-05-20 Incident Record",
+            summary="A Vendor X regional outage on 2026-05-20 degraded Customer A production API availability for about three hours; declared Sev-2.",
+            customers="Customer A",
+            vendors="Vendor X",
+            slas="availability-sla",
+            incidents="inc-vendor-x-2026-05-20",
+            tags="incident,Vendor X,Customer A,availability,Sev-2,2026-05-20",
+            body="""
+## Summary
+
+On 2026-05-20 a Vendor X regional outage degraded DataMeta's production API for Customer A between 09:12 and 12:20 UTC (about 3 hours 8 minutes). Declared **Sev-2**.
+
+## Impact
+
+Customer A's production API returned elevated errors during the window. Customer B and Customer C were not impacted.
+
+## Timeline
+
+- 09:12 - Error-rate alert fires; on-call paged.
+- 09:25 - Vendor X confirmed as the source.
+- 10:05 - Customer A relationship owner notified.
+- 12:20 - Vendor X recovers; service restored.
+
+This incident is the basis for Customer A's May 2026 SLA complaint.
+""",
+        )
+        add_doc(
+            "platform-operations",
+            "postmortems",
+            "vendor-x-outage-postmortem.md",
+            doc_id="vendor-x-outage-postmortem",
+            doc_type="postmortem",
+            entity="Vendor X Outage Postmortem",
+            scope="postmortem",
+            title="Vendor X Outage Postmortem",
+            summary="Root cause was a Vendor X regional failover defect. Corrective actions: multi-region failover and a required Vendor X RCA.",
+            customers="Customer A",
+            vendors="Vendor X",
+            incidents="inc-vendor-x-2026-05-20",
+            tags="postmortem,Vendor X,root cause,corrective action,failover",
+            body="""
+## Root Cause
+
+Vendor X's regional failover did not trigger, leaving requests routed to a failed region for the duration of the outage.
+
+## Corrective Actions
+
+1. Add automated multi-region failover for the Vendor X dependency (owner: Platform Ops).
+2. Require a formal Vendor X RCA within five business days (owner: Vendor Risk).
+3. Confirm Customer A's measured availability and evidence pack with Data Governance.
+
+## Customer Impact
+
+Customer A only. See the Customer A May 2026 availability measurement for the exact figure.
+""",
+        )
+        add_doc(
+            "platform-operations",
+            "slo-measurement",
+            "customer-a-may-2026-availability.md",
+            doc_id="customer-a-may-2026-availability",
+            doc_type="measurement",
+            entity="Customer A May 2026 Availability",
+            scope="availability_measurement",
+            title="Customer A May 2026 Availability",
+            summary="Customer A's measured production API availability for May 2026 was 99.62 percent, below the 99.90 percent commitment.",
+            customers="Customer A",
+            slas="availability-sla",
+            incidents="inc-vendor-x-2026-05-20",
+            tags="measurement,Customer A,availability,99.62 percent,May 2026",
+            body="""
+## Result
+
+Customer A production API availability for May 2026: **99.62%**.
+
+This is below the 99.90% commitment and at or above 99.00%, which maps to a **10% service credit** under the standard schedule. The shortfall is attributable to the Vendor X outage on 2026-05-20. Vendor X is **not** an approved excluded dependency for Customer A, so the downtime counts against the SLA.
+""",
+        )
+        add_doc(
+            "vendor-risk-management",
+            "vendor-x",
+            "vendor-x-incident-rca.md",
+            doc_id="vendor-x-incident-rca",
+            doc_type="rca",
+            entity="Vendor X Incident RCA",
+            scope="vendor_rca",
+            title="Vendor X Incident RCA",
+            summary="Vendor X delivered a root-cause analysis for the 2026-05-20 outage confirming a failover defect; remediation is in progress.",
+            vendors="Vendor X",
+            incidents="inc-vendor-x-2026-05-20",
+            tags="RCA,Vendor X,failover defect,Tier 1,evidence",
+            body="""
+## Vendor X RCA
+
+Vendor X confirmed the 2026-05-20 outage was caused by a defect in their regional failover automation. Vendor X has committed to a fix and provided this RCA within the five-business-day window required for Tier 1 vendors.
+
+This RCA is the evidence required before DataMeta finalizes Customer A's service-credit decision.
+""",
+        )
+        add_doc(
+            "security-incident-response",
+            "communications",
+            "customer-a-incident-notice.md",
+            doc_id="customer-a-incident-notice",
+            doc_type="notice",
+            entity="Customer A Incident Notice",
+            scope="customer_communication",
+            title="Customer A Incident Notice",
+            summary="Customer-safe notice to Customer A acknowledging the 2026-05-20 availability impact without stating SLA liability.",
+            customers="Customer A",
+            vendors="Vendor X",
+            incidents="inc-vendor-x-2026-05-20",
+            tags="notice,Customer A,communication,customer-safe",
+            body="""
+## Customer-Safe Notice
+
+We confirmed a service disruption affecting your production API on 2026-05-20 caused by a third-party dependency. Our team restored service the same day and is completing a full review.
+
+Notices acknowledge impact and next steps. They do **not** state SLA eligibility or offer credits - Legal owns that language.
+""",
+        )
+        add_doc(
+            "data-governance",
+            "audit-evidence",
+            "customer-a-may-2026-evidence-pack.md",
+            doc_id="customer-a-may-2026-evidence-pack",
+            doc_type="evidence_pack",
+            entity="Customer A May 2026 Evidence Pack",
+            scope="audit_evidence",
+            title="Customer A May 2026 Evidence Pack",
+            summary="Audit evidence pack linking the Vendor X incident, Customer A's 99.62 percent measured availability, the customer notice, and the Vendor X RCA.",
+            customers="Customer A",
+            vendors="Vendor X",
+            slas="availability-sla",
+            incidents="inc-vendor-x-2026-05-20",
+            tags="evidence pack,audit,Customer A,Vendor X,service credit",
+            body="""
+## Evidence Pack Contents
+
+- Incident record: Vendor X outage 2026-05-20 (Sev-2).
+- Measured availability: Customer A 99.62% for May 2026.
+- Customer notice: sent 2026-05-20.
+- Vendor X RCA: received within the Tier 1 window.
+- Postmortem: multi-region failover corrective action.
+
+This pack supports the service-credit decision and is retained for seven years under the incident evidence retention policy.
+""",
+        )
+
+        # --- Realistic filler for any folder still under three file docs ----
         for repo, folder_map in folders.items():
-            for folder in folder_map:
+            for folder, folder_summary in folder_map.items():
                 existing = [path for path in files if path.startswith(f"{repo}/{folder}/") and not path.endswith(".datameta.md")]
                 for index in range(len(existing), 3):
                     customer = ["Customer A", "Customer B", "Customer C"][index % 3]
                     vendor = ["Vendor X", "Vendor Y", "Vendor Y"][index % 3]
+                    label = folder.replace("-", " ")
                     add_doc(
                         repo,
                         folder,
-                        f"reference-note-{index + 1}.md",
-                        doc_id=f"{repo}-{folder}-reference-{index + 1}",
+                        f"working-note-{index + 1}.md",
+                        doc_id=f"{repo}-{folder}-note-{index + 1}",
                         doc_type="note",
-                        entity=f"{folder.replace('-', ' ').title()} Reference {index + 1}",
+                        entity=f"{label.title()} Working Note {index + 1}",
                         scope="reference",
-                        title=f"{folder.replace('-', ' ').title()} Reference {index + 1}",
-                        summary=f"Reference note for {folder.replace('-', ' ')} involving {customer} and {vendor}.",
+                        title=f"{label.title()} Working Note {index + 1}",
+                        summary=f"Supporting working note for {label} referencing {customer} and {vendor}; background detail only, not an authoritative SLA or incident record.",
                         customers=customer,
                         vendors=vendor,
-                        tags=f"{folder.replace('-', ' ')},reference,{customer},{vendor}",
+                        tags=f"{label},working note,{customer},{vendor}",
                         body=(
-                            f"This reference note supports the {repo} repository. It mentions {customer} and {vendor} "
-                            "for retrieval contrast, but it does not override executed SLA terms, measured availability, "
-                            "or incident evidence."
+                            f"## {label.title()} Working Note\n\n"
+                            f"This note captures supporting detail for {label} in the {repos[repo]['title']} repository. "
+                            f"It references {customer} and {vendor} for context.\n\n"
+                            f"Folder scope: {folder_summary}\n\n"
+                            "It is background only and does not override executed SLA terms, measured availability, or formal incident evidence."
                         ),
                     )
         return files
@@ -1804,8 +2118,11 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
                         "id": doc["id"],
                         "path": doc["path"],
                         "team": doc["team"],
+                        "entity": doc["entity"],
+                        "scope": doc["scope"],
                         "title": doc["title"],
                         "summary": doc["summary"],
+                        "markdown": doc["text"],
                         "citation": self._citation(doc),
                     }
                 )
@@ -1860,6 +2177,57 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             "validation": validation,
             "neo4j": neo4j_result,
         }
+
+    def _get_neo4j_driver(self):
+        url = configured_env_value("DATAMETA_NEO4J_URL") or ""
+        user = configured_env_value("DATAMETA_NEO4J_USER") or ""
+        password = configured_env_value("DATAMETA_NEO4J_PASSWORD") or ""
+        key = (url, user, password)
+        if self._neo4j_driver is not None and self._neo4j_driver_key == key:
+            return self._neo4j_driver
+        if self._neo4j_driver is not None:
+            try:
+                self._neo4j_driver.close()
+            except Exception:
+                pass
+            self._neo4j_driver = None
+        from neo4j import GraphDatabase
+
+        self._neo4j_driver = GraphDatabase.driver(url, auth=(user, password))
+        self._neo4j_driver_key = key
+        return self._neo4j_driver
+
+    def _run_neo4j_statements(self, statements: list[dict[str, Any]], batch_size: int = 25) -> dict[str, Any]:
+        if not statements:
+            return {"ok": True, "status": "synced", "errors": []}
+        try:
+            from neo4j.exceptions import DriverError, Neo4jError
+        except ImportError as error:
+            return {"ok": False, "status": "driver_missing", "error": str(error)}
+        database = neo4j_database()
+        try:
+            driver = self._get_neo4j_driver()
+        except Exception as error:  # configuration / driver construction failure
+            return {"ok": False, "status": "sync_failed", "error": str(error)}
+        errors: list[dict[str, Any]] = []
+        try:
+            with driver.session(database=database) as session:
+                # Batch into managed write transactions so each chunk is atomic and
+                # the free-tier instance is not asked to hold every embedding at once.
+                for start in range(0, len(statements), batch_size):
+                    batch = statements[start : start + batch_size]
+
+                    def _apply(tx, batch=batch):
+                        for stmt in batch:
+                            tx.run(stmt["statement"], stmt.get("parameters") or {})
+
+                    try:
+                        session.execute_write(_apply)
+                    except Neo4jError as error:
+                        errors.append({"code": error.code, "message": error.message})
+        except DriverError as error:
+            return {"ok": False, "status": "sync_failed", "error": str(error)}
+        return {"ok": not errors, "status": "synced" if not errors else "sync_failed", "errors": errors}
 
     def sync_document_to_neo4j(self, doc: dict[str, Any]) -> dict[str, Any]:
         url = configured_env_value("DATAMETA_NEO4J_URL")
@@ -1919,22 +2287,7 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
                     "parameters": {"id": doc["id"], "target": relationship["target"]},
                 }
             )
-        request_payload = {"statements": statements}
-        token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
-        endpoint = f"{url.rstrip('/')}/db/neo4j/tx/commit"
-        request = urllib.request.Request(
-            endpoint,
-            data=json.dumps(request_payload).encode("utf-8"),
-            headers={"Authorization": f"Basic {token}", "Content-Type": "application/json"},
-            method="POST",
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=15) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as error:
-            return {"ok": False, "status": "sync_failed", "error": str(error)}
-        errors = payload.get("errors") or []
-        return {"ok": not errors, "status": "synced" if not errors else "sync_failed", "errors": errors}
+        return self._run_neo4j_statements(statements)
 
     def _safe_neo4j_label(self, value: str) -> str:
         candidate = re.sub(r"[^A-Za-z0-9_]", "_", str(value).strip())
@@ -2074,12 +2427,21 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
                 and configured_env_value("DATAMETA_NEO4J_USER")
                 and configured_env_value("DATAMETA_NEO4J_PASSWORD")
             ),
+            "database": neo4j_database(),
+            "transport": "bolt",
             "env": {
                 "url": "DATAMETA_NEO4J_URL",
                 "user": "DATAMETA_NEO4J_USER",
                 "password": "DATAMETA_NEO4J_PASSWORD",
+                "database": "DATAMETA_NEO4J_DATABASE",
             },
         }
+
+    def _neo4j_vector_dimensions(self) -> int:
+        raw = configured_env_value("DATAMETA_NEO4J_VECTOR_DIMENSIONS")
+        if raw and raw.isdigit():
+            return int(raw)
+        return 3072
 
     def datameta_index_repos(self, force: bool = False, sync_neo4j: bool = False) -> dict[str, Any]:
         return self.index_repos(force=force, sync_neo4j=sync_neo4j)
@@ -2163,80 +2525,89 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             "metadata_completeness": index["metadata_completeness"],
         }
 
-    def _sync_multirepo_index_to_neo4j(self, index: dict[str, Any]) -> dict[str, Any]:
-        neo4j = self._neo4j_status()
-        if not neo4j["configured"]:
-            return {"ok": False, "status": "not_configured", "required": True}
-        url = configured_env_value("DATAMETA_NEO4J_URL") or ""
-        user = configured_env_value("DATAMETA_NEO4J_USER") or ""
-        password = configured_env_value("DATAMETA_NEO4J_PASSWORD") or ""
-        statements = []
+    def _build_neo4j_sync_statements(self, index: dict[str, Any]) -> list[dict[str, Any]]:
+        target_dims = self._neo4j_vector_dimensions()
+
+        def embedding_clause(node_alias: str, embedding: list[float]) -> tuple[str, bool]:
+            write = isinstance(embedding, list) and len(embedding) == target_dims
+            return (f", {node_alias}.embedding = $embedding" if write else ""), write
+
+        statements: list[dict[str, Any]] = []
         for item in index["repositories"].values():
+            clause, write = embedding_clause("r", item.get("embedding", []))
+            parameters = {
+                "id": item["id"],
+                "repository": item["repository"],
+                "path": item["path"],
+                "title": item["title"],
+                "summary": item["summary"],
+                "metadata_text": item["metadata_text"],
+            }
+            if write:
+                parameters["embedding"] = item["embedding"]
             statements.append(
                 {
                     "statement": (
                         "MERGE (r:Repository {id: $id}) "
                         "SET r.name = $repository, r.path = $path, r.title = $title, r.summary = $summary, "
-                        "r.metadata_text = $metadata_text, r.embedding = $embedding"
+                        "r.metadata_text = $metadata_text" + clause
                     ),
-                    "parameters": {
-                        "id": item["id"],
-                        "repository": item["repository"],
-                        "path": item["path"],
-                        "title": item["title"],
-                        "summary": item["summary"],
-                        "metadata_text": item["metadata_text"],
-                        "embedding": item["embedding"],
-                    },
+                    "parameters": parameters,
                 }
             )
         for item in index["folders"].values():
+            clause, write = embedding_clause("f", item.get("embedding", []))
+            parameters = {
+                "id": item["id"],
+                "repository": item["repository"],
+                "folder": item["folder"],
+                "path": item["path"],
+                "title": item["title"],
+                "summary": item["summary"],
+                "metadata_text": item["metadata_text"],
+            }
+            if write:
+                parameters["embedding"] = item["embedding"]
             statements.append(
                 {
                     "statement": (
                         "MATCH (r:Repository {name: $repository}) "
                         "MERGE (f:Folder {id: $id}) "
                         "SET f.repository = $repository, f.folder = $folder, f.path = $path, f.title = $title, "
-                        "f.summary = $summary, f.metadata_text = $metadata_text, f.embedding = $embedding "
+                        "f.summary = $summary, f.metadata_text = $metadata_text" + clause + " "
                         "MERGE (r)-[:HAS_FOLDER]->(f)"
                     ),
-                    "parameters": {
-                        "id": item["id"],
-                        "repository": item["repository"],
-                        "folder": item["folder"],
-                        "path": item["path"],
-                        "title": item["title"],
-                        "summary": item["summary"],
-                        "metadata_text": item["metadata_text"],
-                        "embedding": item["embedding"],
-                    },
+                    "parameters": parameters,
                 }
             )
         for item in index["files"].values():
             doc = item["doc"]
+            clause, write = embedding_clause("d", item.get("embedding", []))
+            parameters = {
+                "folder_id": f"{doc['repository']}-{doc['folder']}-folder-metadata",
+                "id": item["id"],
+                "repository": item["repository"],
+                "folder": item["folder"],
+                "path": item["path"],
+                "type": doc["type"],
+                "title": item["title"],
+                "summary": item["summary"],
+                "metadata_text": item["metadata_text"],
+                "commit_hash": (doc.get("commit") or {}).get("hash"),
+            }
+            if write:
+                parameters["embedding"] = item["embedding"]
             statements.append(
                 {
                     "statement": (
                         "MATCH (f:Folder {id: $folder_id}) "
                         "MERGE (d:Document {id: $id}) "
                         "SET d.repository = $repository, d.folder = $folder, d.path = $path, d.type = $type, "
-                        "d.title = $title, d.summary = $summary, d.metadata_text = $metadata_text, d.embedding = $embedding, "
-                        "d.commit_hash = $commit_hash "
+                        "d.title = $title, d.summary = $summary, d.metadata_text = $metadata_text, "
+                        "d.commit_hash = $commit_hash" + clause + " "
                         "MERGE (f)-[:HAS_DOCUMENT]->(d)"
                     ),
-                    "parameters": {
-                        "folder_id": f"{doc['repository']}-{doc['folder']}-folder-metadata",
-                        "id": item["id"],
-                        "repository": item["repository"],
-                        "folder": item["folder"],
-                        "path": item["path"],
-                        "type": doc["type"],
-                        "title": item["title"],
-                        "summary": item["summary"],
-                        "metadata_text": item["metadata_text"],
-                        "embedding": item["embedding"],
-                        "commit_hash": (doc.get("commit") or {}).get("hash"),
-                    },
+                    "parameters": parameters,
                 }
             )
             statements.append(
@@ -2304,26 +2675,23 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
                         "SET c.path = $path, c.heading = $heading, c.text = $text "
                         "MERGE (d)-[:HAS_CHUNK]->(c)"
                     ),
-                    "parameters": chunk,
+                    "parameters": {
+                        "id": chunk["id"],
+                        "document_id": chunk["document_id"],
+                        "path": chunk["path"],
+                        "heading": chunk["heading"],
+                        "text": chunk["text"],
+                    },
                 }
             )
-        token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
-        endpoint = f"{url.rstrip('/')}/db/neo4j/tx/commit"
-        batched_errors = []
-        for start in range(0, len(statements), 25):
-            request = urllib.request.Request(
-                endpoint,
-                data=json.dumps({"statements": statements[start : start + 25]}).encode("utf-8"),
-                headers={"Authorization": f"Basic {token}", "Content-Type": "application/json"},
-                method="POST",
-            )
-            try:
-                with urllib.request.urlopen(request, timeout=20) as response:
-                    payload = json.loads(response.read().decode("utf-8"))
-            except urllib.error.URLError as error:
-                return {"ok": False, "status": "sync_failed", "error": str(error)}
-            batched_errors.extend(payload.get("errors") or [])
-        return {"ok": not batched_errors, "status": "synced" if not batched_errors else "sync_failed", "errors": batched_errors}
+        return statements
+
+    def _sync_multirepo_index_to_neo4j(self, index: dict[str, Any]) -> dict[str, Any]:
+        neo4j = self._neo4j_status()
+        if not neo4j["configured"]:
+            return {"ok": False, "status": "not_configured", "required": True}
+        statements = self._build_neo4j_sync_statements(index)
+        return self._run_neo4j_statements(statements)
 
     def datameta_repo_inventory(self) -> dict[str, Any]:
         return self.repo_inventory()
