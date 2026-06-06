@@ -6,14 +6,13 @@ import re
 import shlex
 import sqlite3
 import subprocess
+import base64
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
-
-
-DEFAULT_MODEL = "gpt-5.5"
-DEFAULT_EMBEDDING_MODEL = "text-embedding-3-large"
 
 
 def utc_now() -> str:
@@ -38,6 +37,168 @@ def parse_csv(value: str | None) -> list[str]:
 
 def markdown_escape(value: str) -> str:
     return value.replace("|", "\\|")
+
+
+def load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key or key in os.environ:
+            continue
+        value = value.strip()
+        if value and value[0] in {"'", '"'}:
+            try:
+                parsed = shlex.split(value, posix=True)
+                value = parsed[0] if parsed else ""
+            except ValueError:
+                value = value.strip("'\"")
+        os.environ[key] = value
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+load_env_file(PROJECT_ROOT / ".env")
+load_env_file(PROJECT_ROOT / "backend" / ".env")
+
+
+def configured_env_value(name: str) -> str | None:
+    value = os.environ.get(name, "").strip()
+    return value or None
+
+
+def model_config() -> dict[str, Any]:
+    api_key_configured = configured_env_value("OPENAI_API_KEY") is not None
+    reasoning = configured_env_value("DATAMETA_REASONING_MODEL") or configured_env_value("OPENAI_MODEL")
+    embedding = configured_env_value("DATAMETA_EMBEDDING_MODEL") or configured_env_value("OPENAI_EMBEDDING_MODEL")
+    openai_ready = api_key_configured and reasoning is not None
+    mode = "openai_configured" if openai_ready else "openai_missing_model" if api_key_configured else "local_deterministic"
+    return {
+        "mode": mode,
+        "api_key_configured": api_key_configured,
+        "reasoning": reasoning,
+        "embedding": embedding,
+        "env": {
+            "api_key": "OPENAI_API_KEY",
+            "reasoning": "DATAMETA_REASONING_MODEL or OPENAI_MODEL",
+            "embedding": "DATAMETA_EMBEDDING_MODEL or OPENAI_EMBEDDING_MODEL",
+        },
+    }
+
+
+PROPOSAL_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": [
+        "id",
+        "type",
+        "entity",
+        "scope",
+        "team",
+        "title",
+        "summary",
+        "formula_sql",
+        "required_columns",
+        "preferred_tables",
+        "path",
+        "body_markdown",
+        "search_terms",
+        "neo4j_labels",
+        "neo4j_relationships",
+    ],
+    "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string", "enum": ["definition", "policy", "runbook", "note"]},
+        "entity": {"type": "string"},
+        "scope": {"type": "string"},
+        "team": {"type": "string"},
+        "title": {"type": "string"},
+        "summary": {"type": "string"},
+        "formula_sql": {"type": "string"},
+        "required_columns": {"type": "array", "items": {"type": "string"}},
+        "preferred_tables": {"type": "array", "items": {"type": "string"}},
+        "path": {"type": "string"},
+        "body_markdown": {"type": "string"},
+        "search_terms": {"type": "array", "items": {"type": "string"}},
+        "neo4j_labels": {"type": "array", "items": {"type": "string"}},
+        "neo4j_relationships": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["type", "target"],
+                "properties": {
+                    "type": {"type": "string"},
+                    "target": {"type": "string"},
+                },
+            },
+        },
+    },
+}
+
+
+class OpenAIResponsesClient:
+    def __init__(self, api_key: str, model: str, base_url: str | None = None) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.base_url = (base_url or configured_env_value("OPENAI_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+
+    def structured_json(self, *, system: str, user: str, schema_name: str, schema: dict[str, Any]) -> dict[str, Any]:
+        payload = {
+            "model": self.model,
+            "input": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ],
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": schema_name,
+                    "schema": schema,
+                    "strict": True,
+                }
+            },
+        }
+        request = urllib.request.Request(
+            f"{self.base_url}/responses",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=45) as response:
+                response_payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as error:
+            detail = error.read().decode("utf-8", errors="replace")
+            raise RuntimeError(f"OpenAI Responses API failed: {error.code} {detail}") from error
+        except urllib.error.URLError as error:
+            raise RuntimeError(f"OpenAI Responses API could not be reached: {error.reason}") from error
+
+        output_text = self._output_text(response_payload)
+        try:
+            return json.loads(output_text)
+        except json.JSONDecodeError as error:
+            raise RuntimeError("OpenAI response did not contain valid JSON structured output") from error
+
+    def _output_text(self, response_payload: dict[str, Any]) -> str:
+        if isinstance(response_payload.get("output_text"), str):
+            return response_payload["output_text"]
+        chunks: list[str] = []
+        for item in response_payload.get("output", []):
+            for content in item.get("content", []):
+                if content.get("type") == "output_text" and isinstance(content.get("text"), str):
+                    chunks.append(content["text"])
+                if content.get("type") == "refusal":
+                    raise RuntimeError(f"OpenAI refused the authoring request: {content.get('refusal', '')}")
+        if not chunks:
+            raise RuntimeError("OpenAI response did not include output_text")
+        return "".join(chunks)
 
 
 @dataclass(frozen=True)
@@ -116,13 +277,15 @@ SEEDED_USERS: dict[str, User] = {
 
 
 class DataMetaService:
-    def __init__(self, runtime_dir: Path | None = None) -> None:
-        root = Path(__file__).resolve().parents[2]
+    def __init__(self, runtime_dir: Path | None = None, openai_client: OpenAIResponsesClient | None = None) -> None:
+        root = PROJECT_ROOT
         configured = os.environ.get("DATAMETA_RUNTIME_DIR")
-        self.runtime_dir = Path(configured) if configured else runtime_dir or root / "runtime"
+        default_runtime = Path("/tmp/datameta-runtime") if os.environ.get("VERCEL") else root / "runtime"
+        self.runtime_dir = Path(configured) if configured else runtime_dir or default_runtime
         self.knowledge_repo = self.runtime_dir / "shoppy-knowledge"
         self.app_db = self.runtime_dir / "datameta.sqlite"
         self.warehouse_db = self.runtime_dir / "shoppy-warehouse.sqlite"
+        self.openai_client = openai_client
         self.runtime_dir.mkdir(parents=True, exist_ok=True)
         self._ready = False
 
@@ -723,10 +886,167 @@ Other teams may flag suspected issues, but resolution belongs to data-ownership.
             "proposal": inferred,
             "markdown": markdown,
             "validation": validation,
-            "model": DEFAULT_MODEL,
+            "model": model_config()["reasoning"],
+            "model_config": model_config(),
+            "authoring_source": inferred.get("authoring_source", "local_deterministic"),
         }
 
     def _infer_proposal(self, natural_language: str, target_team: str | None) -> dict[str, Any]:
+        config = model_config()
+        if config["mode"] == "openai_configured":
+            try:
+                return self._infer_proposal_with_openai(natural_language, target_team, config)
+            except Exception as error:
+                if configured_env_value("DATAMETA_OPENAI_FALLBACK") == "deterministic":
+                    fallback = self._infer_proposal_deterministic(natural_language, target_team)
+                    fallback["authoring_source"] = "local_deterministic_after_openai_error"
+                    fallback["authoring_error"] = str(error)
+                    return fallback
+                raise
+        if config["mode"] == "openai_missing_model":
+            raise ValueError("OPENAI_API_KEY is configured, but no authoring model is set. Add DATAMETA_REASONING_MODEL or OPENAI_MODEL to .env.")
+        return self._infer_proposal_deterministic(natural_language, target_team)
+
+    def _infer_proposal_with_openai(
+        self,
+        natural_language: str,
+        target_team: str | None,
+        config: dict[str, Any],
+    ) -> dict[str, Any]:
+        user_context = {
+            "target_team": target_team,
+            "valid_teams": sorted({user_team for user in SEEDED_USERS.values() for user_team in user.read_teams + user.write_teams}),
+            "warehouse_schema": self.warehouse_schema(),
+            "existing_documents": [
+                {
+                    "id": doc["id"],
+                    "path": doc["path"],
+                    "type": doc["type"],
+                    "entity": doc["entity"],
+                    "scope": doc["scope"],
+                    "team": doc["team"],
+                    "title": doc["title"],
+                    "summary": doc["summary"],
+                    "required_columns": doc["required_columns"],
+                    "preferred_tables": doc["preferred_tables"],
+                }
+                for doc in self.all_documents()
+            ],
+        }
+        system = (
+            "You convert analyst comments into DataMeta knowledge proposals. "
+            "Return JSON that exactly matches the schema. Choose metadata that can become a markdown file, "
+            "a searchable document, and Neo4j graph nodes/relationships. "
+            "Use only teams and warehouse columns from the supplied context. "
+            "For calculation definitions, write read-only SQLite SELECT formula_sql using {table}; leave formula_sql empty for non-calculation knowledge. "
+            "Prefer updating the same entity/scope when a comment says change or redefine an existing concept. "
+            "Do not invent inaccessible tables or columns."
+        )
+        user = json.dumps(
+            {
+                "comment": natural_language,
+                "context": user_context,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        proposal = self._authoring_client(config).structured_json(
+            system=system,
+            user=user,
+            schema_name="datameta_knowledge_proposal",
+            schema=PROPOSAL_SCHEMA,
+        )
+        proposal = self._normalize_model_proposal(proposal, natural_language, target_team)
+        proposal["authoring_source"] = "openai_responses"
+        return proposal
+
+    def _authoring_client(self, config: dict[str, Any]) -> OpenAIResponsesClient:
+        if self.openai_client:
+            return self.openai_client
+        api_key = configured_env_value("OPENAI_API_KEY")
+        model = config.get("reasoning")
+        if not api_key or not model:
+            raise RuntimeError("OPENAI_API_KEY and DATAMETA_REASONING_MODEL are required for OpenAI authoring")
+        return OpenAIResponsesClient(api_key=api_key, model=model)
+
+    def _normalize_model_proposal(
+        self,
+        proposal: dict[str, Any],
+        natural_language: str,
+        target_team: str | None,
+    ) -> dict[str, Any]:
+        normalized = dict(proposal)
+        if target_team:
+            normalized["team"] = target_team
+        normalized["team"] = slugify(str(normalized.get("team") or "analytics"))
+        valid_teams = {team for user in SEEDED_USERS.values() for team in user.read_teams + user.write_teams}
+        if normalized["team"] not in valid_teams:
+            raise ValueError(f"OpenAI returned unknown team: {normalized['team']}")
+        normalized["type"] = str(normalized.get("type") or "note")
+        if normalized["type"] not in {"definition", "policy", "runbook", "note"}:
+            normalized["type"] = "note"
+        normalized["entity"] = str(normalized.get("entity") or "Operational Note").strip()[:80]
+        normalized["scope"] = slugify(str(normalized.get("scope") or "general")).replace("-", "_")
+        normalized["id"] = slugify(str(normalized.get("id") or f"{normalized['entity']}-{normalized['team']}-{normalized['scope']}"))
+        normalized["title"] = str(normalized.get("title") or normalized["entity"]).strip()[:120]
+        normalized["summary"] = str(normalized.get("summary") or natural_language.strip()).strip().rstrip(".")[:240] + "."
+        normalized["formula_sql"] = str(normalized.get("formula_sql") or "").strip()
+        normalized["required_columns"] = self._clean_string_list(normalized.get("required_columns"))
+        normalized["preferred_tables"] = self._clean_string_list(normalized.get("preferred_tables"))
+        normalized["search_terms"] = self._clean_string_list(normalized.get("search_terms"))
+        normalized["neo4j_labels"] = self._clean_string_list(normalized.get("neo4j_labels"))
+        normalized["neo4j_relationships"] = self._clean_relationships(normalized.get("neo4j_relationships"))
+        normalized["body_markdown"] = str(normalized.get("body_markdown") or natural_language.strip()).strip()
+        normalized["path"] = self._safe_proposal_path(normalized)
+        if normalized["formula_sql"]:
+            self._validate_formula_template(normalized["formula_sql"])
+        return normalized
+
+    def _clean_string_list(self, values: Any) -> list[str]:
+        if not isinstance(values, list):
+            return []
+        cleaned = []
+        for value in values:
+            item = str(value).strip()
+            if item and item not in cleaned:
+                cleaned.append(item)
+        return cleaned
+
+    def _clean_relationships(self, values: Any) -> list[dict[str, str]]:
+        if not isinstance(values, list):
+            return []
+        relationships = []
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            relationship_type = slugify(str(value.get("type", ""))).replace("-", "_").upper()
+            target = str(value.get("target", "")).strip()
+            if relationship_type and target:
+                relationships.append({"type": relationship_type, "target": target[:120]})
+        return relationships
+
+    def _safe_proposal_path(self, proposal: dict[str, Any]) -> str:
+        path = str(proposal.get("path") or "").strip()
+        if not path or ".." in Path(path).parts or path.startswith("/"):
+            path = f"{proposal['team']}/{slugify(proposal['entity'])}-{slugify(proposal['scope'])}.md"
+        if not path.endswith(".md"):
+            path = f"{path}.md"
+        parts = [slugify(part.removesuffix(".md")) for part in path.split("/") if part]
+        if not parts:
+            parts = [proposal["team"], proposal["id"]]
+        if parts[0] != proposal["team"]:
+            parts.insert(0, proposal["team"])
+        return "/".join(parts[:-1] + [f"{parts[-1]}.md"])
+
+    def _validate_formula_template(self, formula_sql: str) -> None:
+        if "{table}" not in formula_sql:
+            raise ValueError("OpenAI returned formula_sql without {table}")
+        normalized = re.sub(r"\s+", " ", formula_sql.strip()).lower()
+        forbidden = (";", "--", "/*", "*/", " insert ", " update ", " delete ", " drop ", " alter ", " attach ", " pragma ")
+        if not normalized.startswith("select ") or any(token in f" {normalized} " for token in forbidden):
+            raise ValueError("OpenAI returned unsafe formula_sql")
+
+    def _infer_proposal_deterministic(self, natural_language: str, target_team: str | None) -> dict[str, Any]:
         text = natural_language.lower()
         team = target_team or (
             "renewals"
@@ -765,11 +1085,20 @@ Other teams may flag suspected issues, but resolution belongs to data-ownership.
             "required_columns": required_columns,
             "preferred_tables": preferred_tables,
             "path": path,
+            "body_markdown": natural_language.strip(),
+            "search_terms": sorted(tokenize(natural_language))[:12],
+            "neo4j_labels": ["Document", "Definition"] if entity == "ARR" else ["Document", "Note"],
+            "neo4j_relationships": [{"type": "OWNED_BY", "target": team}],
+            "authoring_source": "local_deterministic",
         }
 
     def _proposal_markdown(self, proposal: dict[str, Any], natural_language: str, user: User) -> str:
         required = ",".join(proposal["required_columns"])
         preferred = ",".join(proposal["preferred_tables"])
+        search_terms = ",".join(proposal.get("search_terms", []))
+        neo4j_labels = ",".join(proposal.get("neo4j_labels", []))
+        neo4j_relationships = json.dumps(proposal.get("neo4j_relationships", []), sort_keys=True)
+        body = str(proposal.get("body_markdown") or natural_language.strip()).strip()
         return f"""---
 id: {proposal["id"]}
 type: {proposal["type"]}
@@ -781,12 +1110,16 @@ summary: {proposal["summary"]}
 formula_sql: {proposal["formula_sql"]}
 required_columns: {required}
 preferred_tables: {preferred}
+search_terms: {search_terms}
+neo4j_labels: {neo4j_labels}
+neo4j_relationships: {neo4j_relationships}
+authoring_source: {proposal.get("authoring_source", "local_deterministic")}
 updated_by: {user.name}
 updated_at: {utc_now()}
 ---
 # {proposal["title"]}
 
-{natural_language.strip()}
+{body}
 
 Captured by DataMeta from natural language and awaiting analyst confirmation.
 """
@@ -912,6 +1245,8 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             user.name,
             f"{user.id}@shoppy.local",
         )
+        doc = self.parse_document(path)
+        neo4j_result = self.sync_document_to_neo4j(doc)
         with self._connect_app() as db:
             db.execute("UPDATE proposals SET status = ? WHERE id = ?", ("committed", proposal_id))
         return {
@@ -922,7 +1257,98 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             "confirmed_by": user.name,
             "confirmed_at": utc_now(),
             "validation": validation,
+            "neo4j": neo4j_result,
         }
+
+    def sync_document_to_neo4j(self, doc: dict[str, Any]) -> dict[str, Any]:
+        url = configured_env_value("DATAMETA_NEO4J_URL")
+        user = configured_env_value("DATAMETA_NEO4J_USER")
+        password = configured_env_value("DATAMETA_NEO4J_PASSWORD")
+        if not url or not user or not password:
+            return {"ok": False, "status": "not_configured"}
+        labels = ["Document", *parse_csv(doc["metadata"].get("neo4j_labels"))]
+        if doc["type"] == "definition":
+            labels.append("Definition")
+        if doc["type"] == "runbook":
+            labels.append("Runbook")
+        if doc["type"] == "policy":
+            labels.append("Policy")
+        labels = [label for label in dict.fromkeys(self._safe_neo4j_label(label) for label in labels) if label]
+        label_clause = "".join(f":{label}" for label in labels)
+        statements = [
+            {
+                "statement": (
+                    f"MERGE (d{label_clause} {{id: $id}}) "
+                    "SET d.path = $path, d.type = $type, d.entity = $entity, d.scope = $scope, "
+                    "d.team = $team, d.title = $title, d.summary = $summary, d.body = $body, "
+                    "d.search_terms = $search_terms, d.updated_at = $updated_at "
+                    "WITH d "
+                    "MERGE (team:Team {name: $team}) "
+                    "MERGE (d)-[:OWNED_BY]->(team) "
+                    "WITH d "
+                    "MERGE (entity:Entity {name: $entity}) "
+                    "MERGE (d)-[:ABOUT]->(entity)"
+                ),
+                "parameters": {
+                    "id": doc["id"],
+                    "path": doc["path"],
+                    "type": doc["type"],
+                    "entity": doc["entity"],
+                    "scope": doc["scope"],
+                    "team": doc["team"],
+                    "title": doc["title"],
+                    "summary": doc["summary"],
+                    "body": doc["body"],
+                    "search_terms": parse_csv(doc["metadata"].get("search_terms")),
+                    "updated_at": doc["metadata"].get("updated_at"),
+                },
+            }
+        ]
+        for relationship in self._relationships_from_metadata(doc["metadata"].get("neo4j_relationships")):
+            rel_type = self._safe_neo4j_label(relationship["type"])
+            if not rel_type:
+                continue
+            statements.append(
+                {
+                    "statement": (
+                        "MATCH (d:Document {id: $id}) "
+                        "MERGE (target:Entity {name: $target}) "
+                        f"MERGE (d)-[:{rel_type}]->(target)"
+                    ),
+                    "parameters": {"id": doc["id"], "target": relationship["target"]},
+                }
+            )
+        request_payload = {"statements": statements}
+        token = base64.b64encode(f"{user}:{password}".encode("utf-8")).decode("ascii")
+        endpoint = f"{url.rstrip('/')}/db/neo4j/tx/commit"
+        request = urllib.request.Request(
+            endpoint,
+            data=json.dumps(request_payload).encode("utf-8"),
+            headers={"Authorization": f"Basic {token}", "Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=15) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.URLError as error:
+            return {"ok": False, "status": "sync_failed", "error": str(error)}
+        errors = payload.get("errors") or []
+        return {"ok": not errors, "status": "synced" if not errors else "sync_failed", "errors": errors}
+
+    def _safe_neo4j_label(self, value: str) -> str:
+        candidate = re.sub(r"[^A-Za-z0-9_]", "_", str(value).strip())
+        if not candidate or candidate[0].isdigit():
+            return ""
+        return candidate
+
+    def _relationships_from_metadata(self, value: str | None) -> list[dict[str, str]]:
+        if not value:
+            return []
+        try:
+            raw = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return self._clean_relationships(raw)
 
     def retrieve(self, user_id: str | None, query: str, include_trace: bool = False) -> dict[str, Any]:
         user = self.get_user(user_id)
@@ -1306,7 +1732,7 @@ Resolution:
         return {
             "project": "DataMeta",
             "company": "Shoppy",
-            "models": {"reasoning": DEFAULT_MODEL, "embedding": DEFAULT_EMBEDDING_MODEL},
+            "models": model_config(),
             "user": self._user_payload(user),
             "users": self.users(),
             "schema": self.warehouse_schema(user),

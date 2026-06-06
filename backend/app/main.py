@@ -13,9 +13,19 @@ from .datameta import DataMetaService
 service = DataMetaService()
 
 app = FastAPI(title="DataMeta", version="0.1.0")
+
+
+def allowed_origins() -> list[str]:
+    configured = os.environ.get("DATAMETA_ALLOWED_ORIGINS")
+    if configured:
+        return [origin.strip() for origin in configured.split(",") if origin.strip()]
+    return ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://127.0.0.1:3000"],
+    allow_origins=allowed_origins(),
+    allow_origin_regex=r"https://.*\.vercel\.app" if os.environ.get("VERCEL") else None,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
