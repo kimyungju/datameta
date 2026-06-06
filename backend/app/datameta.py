@@ -348,6 +348,14 @@ SEEDED_USERS: dict[str, User] = {
         write_teams=("data-governance",),
         tables=("sla_availability", "incident_events", "vendor_events"),
     ),
+    "ops.associate": User(
+        id="ops.associate",
+        name="Olivia Operations Associate",
+        roles=("operations", "analyst"),
+        read_teams=("finance", "renewals", "sales"),
+        write_teams=(),
+        tables=("arr_subscriptions",),
+    ),
     "ada.admin": User(
         id="ada.admin",
         name="Ada Admin",
@@ -359,6 +367,9 @@ SEEDED_USERS: dict[str, User] = {
             "platform-operations",
             "vendor-risk-management",
             "data-governance",
+            "finance",
+            "renewals",
+            "sales",
         ),
         write_teams=(
             "security-incident-response",
@@ -367,8 +378,11 @@ SEEDED_USERS: dict[str, User] = {
             "platform-operations",
             "vendor-risk-management",
             "data-governance",
+            "finance",
+            "renewals",
+            "sales",
         ),
-        tables=("sla_availability", "incident_events", "vendor_events"),
+        tables=("sla_availability", "incident_events", "vendor_events", "arr_subscriptions"),
     ),
 }
 
@@ -521,7 +535,33 @@ class DataMetaService:
                     summary TEXT NOT NULL,
                     owner_team TEXT NOT NULL
                 );
+
+                CREATE TABLE arr_subscriptions (
+                    subscription_id TEXT PRIMARY KEY,
+                    customer TEXT NOT NULL,
+                    region TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    renewal_status TEXT NOT NULL,
+                    monthly_recurring_revenue REAL NOT NULL,
+                    annual_contract_value REAL NOT NULL
+                );
                 """
+            )
+            db.executemany(
+                "INSERT INTO arr_subscriptions VALUES (?, ?, ?, ?, ?, ?, ?)",
+                [
+                    # ASEAN book of business. The three ARR definitions disagree on
+                    # which rows/columns to count, so each returns a different number.
+                    ("sub-001", "Acme Singapore", "ASEAN", "active", "committed", 20000.0, 240000.0),
+                    ("sub-002", "Globex Malaysia", "ASEAN", "active", "committed", 15000.0, 180000.0),
+                    ("sub-003", "Initech Thailand", "ASEAN", "active", "likely", 10000.0, 130000.0),
+                    ("sub-004", "Umbrella Indonesia", "ASEAN", "churned", "lost", 8000.0, 0.0),
+                    ("sub-005", "Hooli Philippines", "ASEAN", "active", "pipeline", 0.0, 90000.0),
+                    ("sub-006", "Stark Vietnam", "ASEAN", "active", "committed", 12000.0, 150000.0),
+                    # Non-ASEAN rows, excluded by every ASEAN definition.
+                    ("sub-007", "Wayne EMEA", "EMEA", "active", "committed", 30000.0, 360000.0),
+                    ("sub-008", "Cyberdyne Americas", "AMER", "active", "committed", 25000.0, 300000.0),
+                ],
             )
             db.executemany(
                 "INSERT INTO sla_availability VALUES (?, ?, ?, ?, ?, ?, ?)",
@@ -623,6 +663,30 @@ class DataMetaService:
                 "customers": "Customer A,Customer B,Customer C",
                 "vendors": "Vendor X,Vendor Y",
             },
+            "finance": {
+                "team": "finance",
+                "title": "Finance",
+                "summary": "Board-reported revenue metrics, including the Finance definition of ARR used in official financial reporting.",
+                "tags": "finance,ARR,board reporting,revenue,recurring",
+                "customers": "Acme Singapore,Globex Malaysia,Stark Vietnam",
+                "vendors": "",
+            },
+            "renewals": {
+                "team": "renewals",
+                "title": "Renewals",
+                "summary": "Renewal forecasting metrics, including the Renewals definition of ARR based on committed and likely renewal value.",
+                "tags": "renewals,ARR,forecast,committed,likely,revenue",
+                "customers": "Acme Singapore,Globex Malaysia,Initech Thailand",
+                "vendors": "",
+            },
+            "sales": {
+                "team": "sales",
+                "title": "Sales",
+                "summary": "Sales and executive presentation metrics, including the Sales definition of ARR based on total booked contract value.",
+                "tags": "sales,ARR,bookings,pipeline,presentation,revenue",
+                "customers": "Acme Singapore,Hooli Philippines,Stark Vietnam",
+                "vendors": "",
+            },
         }
         folders = {
             "security-incident-response": {
@@ -654,6 +718,15 @@ class DataMetaService:
                 "audit-evidence": "Evidence packs that connect incident metrics, customer notices, and approval records.",
                 "retention": "Retention and legal hold requirements for incident and SLA evidence.",
                 "access-control": "Role-based access rules for customer impact data and incident records.",
+            },
+            "finance": {
+                "metric-definitions": "Official Finance metric definitions used for board and statutory reporting.",
+            },
+            "renewals": {
+                "metric-definitions": "Renewals metric definitions used for renewal forecasting and pipeline reviews.",
+            },
+            "sales": {
+                "metric-definitions": "Sales metric definitions used for executive presentations and bookings reviews.",
             },
         }
 
@@ -734,8 +807,18 @@ class DataMetaService:
             slas: str = "",
             incidents: str = "",
             tags: str = "",
+            required_columns: str = "",
+            formula_sql: str = "",
+            preferred_tables: str = "",
             body: str,
         ) -> None:
+            extra: dict[str, str] = {}
+            if required_columns or formula_sql or preferred_tables:
+                extra = {
+                    "required_columns": required_columns,
+                    "formula_sql": formula_sql,
+                    "preferred_tables": preferred_tables,
+                }
             add_metadata(
                 f"{repo}/{folder}/{filename}",
                 {
@@ -754,6 +837,7 @@ class DataMetaService:
                     "slas": slas,
                     "incidents": incidents,
                     "tags": tags,
+                    **extra,
                     "neo4j_labels": "Document",
                     "neo4j_relationships": json.dumps(
                         [
@@ -1465,6 +1549,90 @@ This pack supports the service-credit decision and is retained for seven years u
 """,
         )
 
+        # --- Conflicting ARR definitions across teams -----------------------
+        # Three teams define ARR differently. When an operations user who can
+        # read all three asks "calculate ARR", the app must pause and ask which
+        # definition to use instead of guessing. Each formula runs against the
+        # arr_subscriptions table and returns a different number for ASEAN.
+        add_doc(
+            "finance",
+            "metric-definitions",
+            "arr-definition.md",
+            doc_id="arr-finance-board",
+            doc_type="definition",
+            entity="ARR",
+            scope="board_reporting",
+            title="ARR (Finance, Board Reporting)",
+            summary="Finance defines ARR as active monthly recurring revenue annualized: sum of MRR for active subscriptions multiplied by 12. Used for board and statutory reporting.",
+            tags="ARR,finance,board reporting,MRR,active,annualized",
+            required_columns="monthly_recurring_revenue,status,region",
+            formula_sql="SELECT SUM(monthly_recurring_revenue) * 12 FROM {table} WHERE region = 'ASEAN' AND status = 'active'",
+            preferred_tables="arr_subscriptions",
+            body="""
+## Finance Definition of ARR
+
+Finance reports ARR as **active monthly recurring revenue, annualized**:
+
+- Include only subscriptions with `status = 'active'`.
+- Sum `monthly_recurring_revenue` and multiply by 12.
+- Exclude churned subscriptions and any contract value not yet recognized as recurring revenue.
+
+This is the figure used in board decks and statutory reporting.
+""",
+        )
+        add_doc(
+            "renewals",
+            "metric-definitions",
+            "arr-definition.md",
+            doc_id="arr-renewals-forecast",
+            doc_type="definition",
+            entity="ARR",
+            scope="renewal_forecast",
+            title="ARR (Renewals, Forecast)",
+            summary="Renewals defines ARR as the annual contract value of committed and likely renewals. Already annual, so it is not multiplied by 12.",
+            tags="ARR,renewals,forecast,committed,likely,annual contract value",
+            required_columns="annual_contract_value,renewal_status,region",
+            formula_sql="SELECT SUM(annual_contract_value) FROM {table} WHERE region = 'ASEAN' AND renewal_status IN ('committed', 'likely')",
+            preferred_tables="arr_subscriptions",
+            body="""
+## Renewals Definition of ARR
+
+Renewals forecasts ARR from the **annual contract value of renewals it expects to close**:
+
+- Include subscriptions where `renewal_status` is `committed` or `likely`.
+- Sum `annual_contract_value` directly (these values are already annual - do not multiply by 12).
+- Exclude pure pipeline and lost renewals.
+
+This is the figure used in renewal forecasts and pipeline reviews.
+""",
+        )
+        add_doc(
+            "sales",
+            "metric-definitions",
+            "arr-definition.md",
+            doc_id="arr-sales-presentation",
+            doc_type="definition",
+            entity="ARR",
+            scope="exec_presentation",
+            title="ARR (Sales, Executive Presentation)",
+            summary="Sales presents ARR as total booked annual contract value across all non-churned accounts, including pipeline. The most optimistic figure, used in executive presentations.",
+            tags="ARR,sales,bookings,pipeline,presentation,annual contract value",
+            required_columns="annual_contract_value,status,region",
+            formula_sql="SELECT SUM(annual_contract_value) FROM {table} WHERE region = 'ASEAN' AND status != 'churned'",
+            preferred_tables="arr_subscriptions",
+            body="""
+## Sales Definition of ARR
+
+For executive presentations, Sales reports ARR as **total booked annual contract value**:
+
+- Include every subscription that is not `churned`, including new logos still in `pipeline`.
+- Sum `annual_contract_value`.
+- This is the broadest, most optimistic figure - it is what the area head typically asks for in presentations.
+
+Because it counts pipeline and full booked value, it is higher than the Finance and Renewals figures.
+""",
+        )
+
         # --- Realistic filler for any folder still under three file docs ----
         for repo, folder_map in folders.items():
             for folder, folder_summary in folder_map.items():
@@ -1666,10 +1834,13 @@ This pack supports the service-credit decision and is retained for seven years u
         query_tokens = tokenize(question)
         wants_arr = "arr" in query_tokens or {"annual", "recurring", "revenue"} & query_tokens
         definitions = []
-        for doc in self.visible_documents(user):
+        # Only surface calculation definitions when the question actually names
+        # the metric. Otherwise this is a normal knowledge question for the RAG
+        # flow, not a calculation that needs a definition chosen.
+        for doc in self.visible_documents(user) if wants_arr else []:
             if doc["type"] != "definition":
                 continue
-            if wants_arr and doc["entity"].lower() != "arr":
+            if doc["entity"].lower() != "arr":
                 continue
             matching_tables = self._accessible_matching_tables(user, doc["required_columns"])
             if not matching_tables:
@@ -1714,6 +1885,12 @@ This pack supports the service-credit decision and is retained for seven years u
                 "Use renewal opportunities already represented as annual values.",
                 "Include committed and likely renewals.",
                 "Do not multiply by 12 again.",
+            ]
+        if doc["id"] == "arr-sales-presentation":
+            return [
+                "Use total booked annual contract value.",
+                "Include pipeline and new logos, exclude only churned accounts.",
+                "Broadest figure - used by the area head in presentations.",
             ]
         return [doc["summary"]]
 
@@ -2196,6 +2373,22 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
         self._neo4j_driver = GraphDatabase.driver(url, auth=(user, password))
         self._neo4j_driver_key = key
         return self._neo4j_driver
+
+    def _neo4j_read(self, statement: str, parameters: dict[str, Any] | None = None) -> list[dict[str, Any]] | None:
+        if not self._neo4j_status()["configured"]:
+            return None
+        try:
+            from neo4j.exceptions import DriverError, Neo4jError
+        except ImportError:
+            return None
+        try:
+            driver = self._get_neo4j_driver()
+            with driver.session(database=neo4j_database()) as session:
+                return session.execute_read(
+                    lambda tx: [record.data() for record in tx.run(statement, parameters or {})]
+                )
+        except (DriverError, Neo4jError, Exception):
+            return None
 
     def _run_neo4j_statements(self, statements: list[dict[str, Any]], batch_size: int = 25) -> dict[str, Any]:
         if not statements:
@@ -2998,6 +3191,89 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
         summaries = "; ".join(f"{finding['title']}: {finding['summary']}" for finding in findings[:5])
         return True, f"DataMeta found directly relevant knowledge in the selected files: {summaries}."
 
+    def _merge_hybrid_rows(self, vector_rows, chunk_rows, limit):
+        vector_high = max((float(r.get("score") or 0.0) for r in vector_rows), default=0.0)
+        chunk_high = max((float(r.get("score") or 0.0) for r in chunk_rows), default=0.0)
+
+        def blank(row):
+            return {"document_id": row.get("document_id"), "path": row.get("path"), "title": row.get("title"),
+                    "summary": row.get("summary"), "heading": None, "text": None,
+                    "vector_score": 0.0, "keyword_score": 0.0}
+
+        docs: dict[str, dict[str, Any]] = {}
+        for row in vector_rows:
+            entry = docs.setdefault(row.get("document_id"), blank(row))
+            entry["vector_score"] = (float(row.get("score") or 0.0) / vector_high) if vector_high else 0.0
+        for row in chunk_rows:
+            entry = docs.setdefault(row.get("document_id"), blank(row))
+            normalized = (float(row.get("score") or 0.0) / chunk_high) if chunk_high else 0.0
+            if normalized >= entry["keyword_score"]:
+                entry["keyword_score"] = normalized
+                entry["heading"] = row.get("heading")
+                entry["text"] = row.get("text")
+            entry["path"] = entry["path"] or row.get("path")
+            entry["title"] = entry["title"] or row.get("title")
+            entry["summary"] = entry["summary"] or row.get("summary")
+
+        evidence: list[dict[str, Any]] = []
+        for entry in docs.values():
+            vs = entry["vector_score"]; ks = entry["keyword_score"]
+            score = round(vs * 0.6 + ks * 0.4, 4)
+            body = entry["text"] or entry["summary"] or ""
+            text = re.sub(r"\s+", " ", body).strip()
+            snippet = (text[:317].rstrip() + "...") if len(text) > 320 else text
+            heading = entry["heading"] or entry["title"] or ""
+            path = entry["path"] or ""
+            parts = path.split("/")
+            evidence.append({
+                "path": path, "heading": heading, "snippet": snippet,
+                "title": entry["title"] or path, "summary": entry["summary"] or "",
+                "score": score, "vector_score": round(vs, 4), "keyword_score": round(ks, 4),
+                "citation": {"repository": parts[0] if parts else "",
+                             "folder": "/".join(parts[1:-1]) if len(parts) > 2 else "",
+                             "file_path": path, "path": path, "heading": heading,
+                             "snippet": snippet, "document_id": entry["document_id"],
+                             "title": entry["title"] or path}})
+        evidence.sort(key=lambda item: item["score"], reverse=True)
+        return evidence[:limit]
+
+    def _neo4j_hybrid_retrieve(self, user, query, query_embedding, limit=8):
+        if not self._neo4j_status()["configured"]:
+            return None
+        if len(query_embedding) != self._neo4j_vector_dimensions():
+            return None
+        is_admin = user.is_admin
+        teams = list(user.read_teams)
+        vector_rows = self._neo4j_read(
+            "CALL db.index.vector.queryNodes('datameta_document_embedding', $k, $vec) YIELD node, score "
+            "MATCH (node)-[:OWNED_BY]->(t:Team) WHERE $admin OR t.name IN $teams "
+            "RETURN node.id AS document_id, node.path AS path, node.title AS title, node.summary AS summary, "
+            "t.name AS team, score AS score",
+            {"k": limit * 2, "vec": query_embedding, "admin": is_admin, "teams": teams}) or []
+        chunk_rows = self._neo4j_read(
+            "CALL db.index.fulltext.queryNodes('datameta_chunk_fulltext', $q) YIELD node, score "
+            "MATCH (d:Document)-[:HAS_CHUNK]->(node) MATCH (d)-[:OWNED_BY]->(t:Team) "
+            "WHERE $admin OR t.name IN $teams "
+            "RETURN d.id AS document_id, d.path AS path, d.title AS title, d.summary AS summary, "
+            "node.heading AS heading, node.text AS text, t.name AS team, score AS score",
+            {"q": query, "admin": is_admin, "teams": teams}) or []
+        if not is_admin:
+            allowed = set(teams)
+            vector_rows = [r for r in vector_rows if r.get("team") in allowed]
+            chunk_rows = [r for r in chunk_rows if r.get("team") in allowed]
+        return {"source": "neo4j_hybrid", "evidence": self._merge_hybrid_rows(vector_rows, chunk_rows, limit)}
+
+    def _local_evidence_from_findings(self, findings, shortlisted_files):
+        hybrid_by_path = {item["path"]: (item.get("hybrid") or {}) for item in shortlisted_files}
+        evidence = []
+        for finding in findings:
+            hybrid = hybrid_by_path.get(finding["file_path"], {})
+            evidence.append({"path": finding["file_path"], "heading": finding["heading"],
+                             "snippet": finding["snippet"], "title": finding["title"], "summary": finding["summary"],
+                             "score": hybrid.get("score", 0.0), "vector_score": hybrid.get("vector_score", 0.0),
+                             "keyword_score": hybrid.get("keyword_score", 0.0), "citation": finding["citation"]})
+        return evidence
+
     def datameta_multirepo_query(self, user_id: str | None, query: str, include_trace: bool = True) -> dict[str, Any]:
         return self.multirepo_query(user_id, query, include_trace)
 
@@ -3049,13 +3325,24 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
                     folder_findings.append(future.result())
         folder_findings.sort(key=lambda value: folder_scores.get(value["folder_path"], 0), reverse=True)
         findings = [finding for folder in folder_findings for finding in folder["findings"]]
-        answerable, answer_text = self._synthesize_multirepo_answer(query, findings)
-        citations = [finding["citation"] for finding in findings] if answerable else []
         shortlisted_files = [
             file_payload
             for folder in folder_findings
             for file_payload in folder["selected_files"]
         ]
+        neo4j_retrieval = self._neo4j_hybrid_retrieve(user, query, query_embedding)
+        if neo4j_retrieval and neo4j_retrieval.get("evidence"):
+            retrieval = neo4j_retrieval
+            retrieval_source = "neo4j_hybrid"
+            evidence = retrieval["evidence"]
+            answerable, answer_text = self._synthesize_multirepo_answer(query, evidence)
+            citations = [item["citation"] for item in evidence] if answerable else []
+        else:
+            retrieval_source = "local_hybrid"
+            evidence = self._local_evidence_from_findings(findings, shortlisted_files)
+            retrieval = {"source": "local_hybrid", "evidence": evidence}
+            answerable, answer_text = self._synthesize_multirepo_answer(query, findings)
+            citations = [finding["citation"] for finding in findings] if answerable else []
         trace = None
         if include_trace:
             trace = {
@@ -3070,6 +3357,7 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
                 "embedding": index["embedding"],
                 "query_embedding": query_embedding_status,
                 "neo4j": index["neo4j"],
+                "retrieval_source": retrieval_source,
                 "no_guessing_policy": "Return not answerable when selected files do not directly support the answer.",
             }
         return {
@@ -3082,6 +3370,8 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             "shortlisted_files": shortlisted_files,
             "folder_subagent_findings": folder_findings,
             "citations": citations,
+            "retrieval_source": retrieval_source,
+            "retrieval": retrieval,
             "trace": trace,
         }
 
@@ -3126,6 +3416,24 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
         }
         if tokens & data_quality_tokens:
             return self._triage_data_quality_question(user_id, question, include_trace)
+        # Calculation intent: if the question names a metric we have definitions
+        # for, surface them. When more than one definition is visible, pause and
+        # ask which one to use instead of guessing.
+        prepared = self.prepare_calculation(question, user_id)
+        if prepared["definitions"]:
+            if prepared["requires_choice"]:
+                return {"intent": "choose_definition", "action": "datameta_choose_definition", **prepared}
+            definition = prepared["definitions"][0]
+            table = definition["accessible_tables"][0]["table"] if definition["accessible_tables"] else None
+            if table:
+                calculation = self.run_calculation(user_id, definition["id"], table)
+                return {
+                    "intent": "calculation",
+                    "action": "datameta_calculation",
+                    "prepare": prepared,
+                    "calculation": calculation,
+                }
+            return {"intent": "choose_definition", "action": "datameta_choose_definition", **prepared}
         answer = self.answer(user_id, question, include_trace)
         return {"intent": "answer", "action": "datameta_answer", **answer}
 

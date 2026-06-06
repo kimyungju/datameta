@@ -159,6 +159,18 @@ type ProposalResult = {
   model?: string | null;
 };
 
+type ConflictFile = {
+  id: string;
+  path: string;
+  team: string;
+  entity: string;
+  scope: string;
+  title: string;
+  summary: string;
+  markdown: string;
+  citation: Citation;
+};
+
 type ValidationResult = {
   ok: boolean;
   blocked: boolean;
@@ -167,7 +179,7 @@ type ValidationResult = {
     name: string;
     ok: boolean;
     detail: string;
-    conflicts?: unknown[];
+    conflicts?: ConflictFile[];
     matching_tables?: unknown[];
   }>;
   samples: Record<string, Record<string, unknown[]>>;
@@ -517,12 +529,44 @@ export default function Home() {
 
   async function askQuestion() {
     const result = await runAction(() =>
-      api<MultirepoAnswer>("/api/multirepo/query", {
+      api<Record<string, unknown>>("/api/ask", {
         method: "POST",
         body: JSON.stringify({ question: query, include_trace: includeTrace })
       })
     );
-    if (result) setAnswer(result);
+    if (!result) return;
+    const intent = result.intent as string | undefined;
+    if (intent === "choose_definition") {
+      const prep = result as unknown as PrepareResult;
+      setPrepare(prep);
+      const first = prep.definitions[0];
+      setSelectedDefinition(first?.id ?? "");
+      setSelectedTable(first?.accessible_tables[0]?.table ?? "");
+      setCalculation(null);
+      setAnswer(null);
+    } else if (intent === "calculation") {
+      setPrepare((result.prepare as PrepareResult) ?? null);
+      setCalculation((result.calculation as CalculationResult) ?? null);
+      setAnswer(null);
+    } else {
+      setAnswer(result as unknown as MultirepoAnswer);
+      setPrepare(null);
+      setCalculation(null);
+    }
+  }
+
+  async function chooseDefinition(definitionId: string, table: string) {
+    setSelectedDefinition(definitionId);
+    setSelectedTable(table);
+    const result = await runAction(
+      () =>
+        api<CalculationResult>("/api/calculation/run", {
+          method: "POST",
+          body: JSON.stringify({ definition_id: definitionId, table })
+        }),
+      "Calculation complete"
+    );
+    if (result) setCalculation(result);
   }
 
   async function searchMarkdown(nextQuery = fileSearch) {
@@ -849,6 +893,51 @@ export default function Home() {
               <input type="checkbox" checked={includeTrace} onChange={(event) => setIncludeTrace(event.target.checked)} />
               Trace
             </label>
+
+            {prepare && prepare.requires_choice && (
+              <>
+                <div className="message-band warn">
+                  <SlidersHorizontal size={18} />
+                  <span>{prepare.message}</span>
+                </div>
+                <div className="definition-grid">
+                  {prepare.definitions.map((definition) => {
+                    const table = definition.accessible_tables[0]?.table ?? "";
+                    return (
+                      <button
+                        className={`definition-tile ${selectedDefinition === definition.id ? "selected" : ""}`}
+                        key={definition.id}
+                        type="button"
+                        onClick={() => chooseDefinition(definition.id, table)}
+                      >
+                        <div className="tile-head">
+                          <span className={`team-dot ${definition.team}`} />
+                          <strong>{definition.title}</strong>
+                        </div>
+                        <p>{definition.summary}</p>
+                        <ul>
+                          {definition.entails.map((item) => (
+                            <li key={item}>{item}</li>
+                          ))}
+                        </ul>
+                        <small>Use {definition.team} definition · table {table || "—"}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              </>
+            )}
+
+            {calculation && calculation.result && (
+              <div className="result-band">
+                <div>
+                  <p className="eyebrow">{calculation.definition?.team} · {calculation.table}</p>
+                  <h3>{money(calculation.result.value)}</h3>
+                </div>
+                <code>{calculation.sql}</code>
+              </div>
+            )}
+
             {answer && (
               <div className="answer">
                 <div className={`message-band ${answer.answerable ? "" : "warn"}`}>
@@ -1038,6 +1127,25 @@ export default function Home() {
                         {check.ok ? <Check size={16} /> : <AlertTriangle size={16} />}
                         <span>{check.name}</span>
                         <small>{check.detail}</small>
+                        {check.conflicts && check.conflicts.length > 0 && (
+                          <div className="conflict-files">
+                            {check.conflicts.map((conflict) => (
+                              <div className="conflict-file" key={conflict.id}>
+                                <div className="conflict-file-head">
+                                  <FileClock size={14} />
+                                  <strong>
+                                    {conflict.entity} · {conflict.scope}
+                                  </strong>
+                                </div>
+                                <code className="conflict-file-path">{conflict.path}</code>
+                                <p className="conflict-file-note">
+                                  This committed file will be overwritten if you confirm.
+                                </p>
+                                <pre className="conflict-file-markdown">{conflict.markdown}</pre>
+                              </div>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

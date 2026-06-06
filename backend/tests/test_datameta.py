@@ -204,6 +204,39 @@ class DataMetaServiceTest(unittest.TestCase):
         self.assertTrue(root.json()["ok"])
         self.assertTrue(health.json()["ok"])
 
+    def test_neo4j_vector_dimensions_defaults_and_override(self) -> None:
+        self.assertEqual(3072, self.service._neo4j_vector_dimensions())
+        with patch.dict("os.environ", {"DATAMETA_NEO4J_VECTOR_DIMENSIONS": "256"}):
+            self.assertEqual(256, self.service._neo4j_vector_dimensions())
+
+    def test_document_sync_writes_embedding_when_dimensions_match(self) -> None:
+        self.service.index_repos()
+        index = self.service._multirepo_index
+        with patch.dict("os.environ", {"DATAMETA_NEO4J_VECTOR_DIMENSIONS": "256"}):
+            statements = self.service._build_neo4j_sync_statements(index)
+        document_statements = [s for s in statements if "MERGE (d:Document" in s["statement"]]
+        self.assertTrue(document_statements)
+        self.assertIn("d.embedding = $embedding", document_statements[0]["statement"])
+        self.assertIn("embedding", document_statements[0]["parameters"])
+
+    def test_document_sync_omits_embedding_when_dimensions_mismatch(self) -> None:
+        self.service.index_repos()
+        index = self.service._multirepo_index
+        with patch.dict("os.environ", {"DATAMETA_NEO4J_VECTOR_DIMENSIONS": "3072"}):
+            statements = self.service._build_neo4j_sync_statements(index)
+        document_statements = [s for s in statements if "MERGE (d:Document" in s["statement"]]
+        self.assertTrue(document_statements)
+        self.assertNotIn("d.embedding", document_statements[0]["statement"])
+
+    def test_chunk_sync_never_writes_embedding(self) -> None:
+        self.service.index_repos()
+        index = self.service._multirepo_index
+        with patch.dict("os.environ", {"DATAMETA_NEO4J_VECTOR_DIMENSIONS": "256"}):
+            statements = self.service._build_neo4j_sync_statements(index)
+        chunk_statements = [s for s in statements if "MERGE (c:Chunk" in s["statement"]]
+        self.assertTrue(chunk_statements)
+        self.assertNotIn("c.embedding", chunk_statements[0]["statement"])
+
     def test_openai_authoring_still_generates_markdown_graph_and_search_metadata(self) -> None:
         self.service.openai_client = FakeOpenAIClient()
         with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key", "DATAMETA_REASONING_MODEL": "test-authoring-model"}):
@@ -217,6 +250,135 @@ class DataMetaServiceTest(unittest.TestCase):
         self.assertIn("Vendor X evidence", proposal["markdown"])
         self.assertIn("search_terms: Customer A,Vendor X,SLA,service credit", proposal["markdown"])
         self.assertIn('"target": "Customer A"', proposal["markdown"])
+
+    def test_conflict_check_includes_prior_committed_markdown(self) -> None:
+        self.service.openai_client = FakeOpenAIClient()
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key", "DATAMETA_REASONING_MODEL": "test-authoring-model"}):
+            proposal = self.service.create_author_proposal(
+                "leah.legal",
+                "Change Customer A SLA handling so Vendor X evidence is required before credit language is approved.",
+                "legal-contracts",
+            )
+        validation = self.service.validate_proposal(proposal["proposal_id"], "leah.legal")
+        conflict_check = next(
+            check for check in validation["checks"] if check["name"] == "Same entity + scope conflict check"
+        )
+        self.assertFalse(conflict_check["ok"])
+        self.assertTrue(validation["needs_confirmation"])
+        conflicts = conflict_check["conflicts"]
+        self.assertTrue(conflicts)
+        existing = self.service.read_markdown_file(
+            "leah.legal", "legal-contracts/customer-agreements/customer-a-availability-sla.md"
+        )
+        prior = next(
+            conflict
+            for conflict in conflicts
+            if conflict["path"] == "legal-contracts/customer-agreements/customer-a-availability-sla.md"
+        )
+        self.assertEqual("Customer A Availability SLA", prior["entity"])
+        self.assertEqual("customer_a_availability", prior["scope"])
+        self.assertIn("markdown", prior)
+        self.assertEqual(existing["markdown"], prior["markdown"])
+        self.assertIn("Customer A's enterprise agreement", prior["markdown"])
+
+
+    def test_local_retrieval_source_is_local_hybrid(self) -> None:
+        result = self.service.multirepo_query(
+            "junior.analyst",
+            "Vendor X incident evidence for Customer A SLA review",
+            True,
+        )
+        self.assertEqual("local_hybrid", result["retrieval_source"])
+        self.assertEqual("local_hybrid", result["trace"]["retrieval_source"])
+        evidence = result["retrieval"]["evidence"]
+        self.assertTrue(evidence)
+        for item in evidence:
+            for key in ("path", "heading", "snippet", "score", "vector_score", "keyword_score", "citation"):
+                self.assertIn(key, item)
+
+    def test_neo4j_hybrid_retrieval_merges_document_vector_and_chunk_fulltext(self) -> None:
+        doc_path = "platform-operations/incidents/vendor-x-2026-05-availability-incident.md"
+        vector_rows = [
+            {
+                "document_id": "inc-vendor-x-2026-05-20",
+                "path": doc_path,
+                "title": "Vendor X Availability Incident on 2026-05-20",
+                "summary": "Vendor X token validation degradation.",
+                "team": "platform-operations",
+                "score": 0.92,
+            }
+        ]
+        chunk_rows = [
+            {
+                "document_id": "inc-vendor-x-2026-05-20",
+                "path": doc_path,
+                "title": "Vendor X Availability Incident on 2026-05-20",
+                "summary": "Vendor X token validation degradation.",
+                "heading": "Timeline",
+                "text": "Vendor X ... Customer A.",
+                "team": "platform-operations",
+                "score": 3.1,
+            }
+        ]
+
+        def fake(statement, parameters=None):
+            self.assertIn("admin", parameters)
+            self.assertIn("teams", parameters)
+            if "db.index.vector.queryNodes" in statement:
+                return vector_rows
+            if "db.index.fulltext.queryNodes" in statement:
+                return chunk_rows
+            return []
+
+        with patch.dict(
+            "os.environ",
+            {
+                "DATAMETA_NEO4J_URL": "bolt://x",
+                "DATAMETA_NEO4J_USER": "neo4j",
+                "DATAMETA_NEO4J_PASSWORD": "secret",
+                "DATAMETA_NEO4J_VECTOR_DIMENSIONS": "256",
+            },
+        ):
+            with patch.object(self.service, "_neo4j_read", side_effect=fake):
+                result = self.service.multirepo_query(
+                    "junior.analyst",
+                    "Vendor X incident evidence for Customer A SLA review",
+                    True,
+                )
+        self.assertEqual("neo4j_hybrid", result["retrieval_source"])
+        self.assertEqual("neo4j_hybrid", result["trace"]["retrieval_source"])
+        evidence = result["retrieval"]["evidence"]
+        self.assertEqual(1, len(evidence))
+        item = evidence[0]
+        self.assertGreater(item["vector_score"], 0.0)
+        self.assertGreater(item["keyword_score"], 0.0)
+        self.assertGreater(item["score"], 0.0)
+        self.assertEqual("Timeline", item["heading"])
+        cited = {c["file_path"] for c in result["citations"]}
+        self.assertIn(doc_path, cited)
+
+    def test_neo4j_hybrid_respects_rbac(self) -> None:
+        captured: dict[str, object] = {}
+
+        def capture(statement, parameters=None):
+            captured["teams"] = parameters.get("teams")
+            captured["admin"] = parameters.get("admin")
+            return []
+
+        with patch.dict(
+            "os.environ",
+            {
+                "DATAMETA_NEO4J_URL": "bolt://x",
+                "DATAMETA_NEO4J_USER": "neo4j",
+                "DATAMETA_NEO4J_PASSWORD": "secret",
+                "DATAMETA_NEO4J_VECTOR_DIMENSIONS": "256",
+            },
+        ):
+            with patch.object(self.service, "_neo4j_read", side_effect=capture):
+                self.service.multirepo_query("leah.legal", "Customer A SLA", True)
+        self.assertFalse(captured["admin"])
+        self.assertNotIn("security-incident-response", captured["teams"])
+        self.assertIn("legal-contracts", captured["teams"])
 
 
 if __name__ == "__main__":
