@@ -218,6 +218,71 @@ button:disabled {
   opacity: 0.45;
 }
 
+.login-shell {
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 24px;
+  background: linear-gradient(135deg, #f7f9fb 0%, #eef4f8 48%, #f8f6f1 100%);
+}
+
+.login-panel {
+  display: grid;
+  gap: 18px;
+  width: min(100%, 420px);
+  padding: 24px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.login-brand {
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.login-copy {
+  display: grid;
+  gap: 6px;
+}
+
+.login-details {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fbfcfe;
+}
+
+.login-details > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.login-button {
+  width: 100%;
+}
+
+.active-user {
+  display: grid;
+  gap: 4px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: white;
+}
+
+.active-user strong {
+  font-size: 15px;
+  line-height: 1.25;
+}
+
 .workspace {
   min-width: 0;
   padding: 24px;

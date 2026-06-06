@@ -54,3 +54,10 @@ tool_timeout_sec = 120
 ```
 
 If `DATAMETA_MCP_TOKEN` is unset, the local demo MCP endpoint allows unauthenticated calls.
+
+Once configured, users can ask Codex plain-language questions such as:
+
+- "What is the definition of ARR?"
+- "Data point seems suspicious"
+
+Codex should call `datameta_ask` first for conversational requests. It answers grounded definition questions with citations, and it either flags detailed data-quality concerns or asks for the missing table, subject, and description.

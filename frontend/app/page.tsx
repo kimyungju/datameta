@@ -11,6 +11,7 @@ import {
   GitCommitHorizontal,
   History,
   KeyRound,
+  LogIn,
   Loader2,
   MessageSquareText,
   Play,
@@ -184,7 +185,8 @@ function dateLabel(value?: string) {
 
 export default function Home() {
   const [tab, setTab] = useState<Tab>("calculate");
-  const [userId, setUserId] = useState("junior.analyst");
+  const [userId, setUserId] = useState("");
+  const [loginUserId, setLoginUserId] = useState("junior.analyst");
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
   const [loading, setLoading] = useState(false);
   const [notice, setNotice] = useState("");
@@ -212,6 +214,7 @@ export default function Home() {
   const [resolutionText, setResolutionText] = useState("The marketplace feed duplicated a single order. Exclude ord_005 until the data fix lands.");
 
   const activeUser = useMemo(() => bootstrap?.users.find((user) => user.id === userId), [bootstrap, userId]);
+  const loginUser = useMemo(() => bootstrap?.users.find((user) => user.id === loginUserId), [bootstrap, loginUserId]);
 
   async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -232,7 +235,7 @@ export default function Home() {
   async function refresh(nextUser = userId) {
     setError("");
     const response = await fetch(`${API_BASE}/api/bootstrap`, {
-      headers: { "x-user-id": nextUser }
+      headers: { "x-user-id": nextUser || "junior.analyst" }
     });
     if (!response.ok) throw new Error("Backend is not available on port 8000");
     const payload = (await response.json()) as Bootstrap;
@@ -256,15 +259,35 @@ export default function Home() {
   }
 
   useEffect(() => {
-    refresh().catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)));
+    refresh("junior.analyst").catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)));
   }, []);
 
   useEffect(() => {
+    if (!userId) return;
     setPrepare(null);
     setCalculation(null);
     setAnswer(null);
     refresh(userId).catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)));
   }, [userId]);
+
+  function login() {
+    setNotice("");
+    setError("");
+    setUserId(loginUserId);
+  }
+
+  function switchUser() {
+    setLoginUserId(userId || loginUserId);
+    setUserId("");
+    setPrepare(null);
+    setCalculation(null);
+    setAnswer(null);
+    setProposal(null);
+    setCommitResult(null);
+    setPipeline(null);
+    setFlagResult(null);
+    setNotice("");
+  }
 
   async function prepareCalculation() {
     const result = await runAction(
@@ -391,6 +414,57 @@ export default function Home() {
   const tableOptions = currentDefinition?.accessible_tables ?? [];
   const maxChart = pipeline?.chart.reduce((max, item) => Math.max(max, item.value), 0) ?? 1;
 
+  if (!userId) {
+    return (
+      <main className="login-shell">
+        <section className="login-panel">
+          <div className="brand login-brand">
+            <div className="mark">DM</div>
+            <div>
+              <h1>DataMeta</h1>
+              <p>Shoppy</p>
+            </div>
+          </div>
+
+          <div className="login-copy">
+            <p className="eyebrow">{bootstrap?.models.reasoning ?? "gpt-5.5"} · RBAC demo</p>
+            <h2>Choose your user</h2>
+          </div>
+
+          <label>
+            User
+            <select value={loginUserId} onChange={(event) => setLoginUserId(event.target.value)}>
+              {(bootstrap?.users ?? []).map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.name}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {loginUser && (
+            <div className="login-details">
+              <div>
+                <KeyRound size={16} />
+                <span>{loginUser.roles.join(", ")}</span>
+              </div>
+              <div>
+                <ShieldCheck size={16} />
+                <span>{loginUser.read_teams.join(", ")}</span>
+              </div>
+            </div>
+          )}
+
+          <button className="primary login-button" type="button" onClick={login} disabled={!bootstrap?.users.length} title="Continue">
+            <LogIn size={17} />
+            Continue
+          </button>
+          {error && <span className="error">{error}</span>}
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="shell">
       <aside className="sidebar">
@@ -402,16 +476,11 @@ export default function Home() {
           </div>
         </div>
 
-        <label className="field-label" htmlFor="user">
-          Active user
-        </label>
-        <select id="user" value={userId} onChange={(event) => setUserId(event.target.value)}>
-          {bootstrap?.users.map((user) => (
-            <option key={user.id} value={user.id}>
-              {user.name}
-            </option>
-          ))}
-        </select>
+        <div className="active-user">
+          <span className="field-label">Signed in as</span>
+          <strong>{activeUser?.name}</strong>
+          <small>{activeUser?.id}</small>
+        </div>
 
         <div className="identity">
           <KeyRound size={16} />
@@ -434,6 +503,10 @@ export default function Home() {
         <button className="icon-text ghost" type="button" onClick={() => refresh()} title="Refresh">
           <RefreshCw size={16} />
           Refresh
+        </button>
+        <button className="icon-text ghost" type="button" onClick={switchUser} title="Switch user">
+          <LogIn size={16} />
+          Switch user
         </button>
       </aside>
 
