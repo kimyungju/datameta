@@ -375,6 +375,10 @@ button:disabled {
   color: #1f4f7a;
 }
 
+.message-band.warn {
+  color: var(--orange);
+}
+
 .definition-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -689,6 +693,52 @@ th {
   gap: 12px;
 }
 
+.trace-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.trace-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.trace-panel h3 {
+  display: flex;
+  align-items: center;
+  min-height: 42px;
+  margin: 0;
+  padding: 0 13px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+
+.agent-row {
+  display: grid;
+  gap: 10px;
+  padding: 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.agent-row:last-child {
+  border-bottom: 0;
+}
+
+.agent-row blockquote {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid var(--blue);
+  background: #f8fbff;
+}
+
+.agent-row blockquote p {
+  margin: 5px 0;
+}
+
 .doc-row > div,
 .commit-row > div {
   min-width: 0;
@@ -733,6 +783,7 @@ th {
   }
 
   .history-grid,
+  .trace-grid,
   .split,
   .definition-grid {
     grid-template-columns: 1fr;

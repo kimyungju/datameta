@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "DataMeta",
-  description: "Shoppy analytics knowledge operations"
+  description: "Generic Enterprise incident knowledge operations"
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

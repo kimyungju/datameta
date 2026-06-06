@@ -37,6 +37,11 @@ type User = {
 
 type Citation = {
   path: string;
+  repository?: string;
+  folder?: string;
+  file_path?: string;
+  heading?: string;
+  snippet?: string;
   commit?: string;
   commit_hash?: string;
   author?: string;
@@ -87,6 +92,7 @@ type Bootstrap = {
   users: User[];
   schema: { table: string; columns: string[] }[];
   history: HistoryPayload;
+  inventory?: Record<string, unknown>;
 };
 
 type HistoryPayload = {
@@ -169,6 +175,52 @@ type ApiError = { detail?: string };
 
 type Tab = "calculate" | "query" | "author" | "pipeline" | "outliers" | "history";
 
+type ShortlistItem = {
+  id: string;
+  level: string;
+  repository: string;
+  folder: string;
+  path: string;
+  title: string;
+  summary: string;
+  hybrid?: {
+    score?: number;
+    keyword_score?: number;
+    vector_score?: number;
+    phrase_boost?: number;
+    keyword_hits?: string[];
+  };
+};
+
+type FolderAgentResult = {
+  repository: string;
+  folder: string;
+  folder_path: string;
+  agent: string;
+  agent_error?: string;
+  selected_files: ShortlistItem[];
+  full_content_files_read: string[];
+  findings: Array<{
+    file_path: string;
+    title: string;
+    heading: string;
+    summary: string;
+    snippet: string;
+    citation: Citation;
+  }>;
+};
+
+type MultirepoAnswer = {
+  answerable: boolean;
+  answer: string;
+  citations: Citation[];
+  shortlisted_repositories: ShortlistItem[];
+  shortlisted_folders: ShortlistItem[];
+  shortlisted_files: ShortlistItem[];
+  folder_subagent_findings: FolderAgentResult[];
+  trace?: Record<string, unknown>;
+};
+
 function money(value: number | undefined) {
   if (typeof value !== "number") return "-";
   return new Intl.NumberFormat("en-US", {
@@ -197,7 +249,7 @@ function modelStatus(models?: Bootstrap["models"]) {
 }
 
 export default function Home() {
-  const [tab, setTab] = useState<Tab>("calculate");
+  const [tab, setTab] = useState<Tab>("query");
   const [userId, setUserId] = useState("");
   const [loginUserId, setLoginUserId] = useState("junior.analyst");
   const [bootstrap, setBootstrap] = useState<Bootstrap | null>(null);
@@ -211,18 +263,18 @@ export default function Home() {
   const [selectedTable, setSelectedTable] = useState("");
   const [calculation, setCalculation] = useState<CalculationResult | null>(null);
 
-  const [query, setQuery] = useState("How do we calculate ARR for a board update?");
-  const [answer, setAnswer] = useState<Record<string, unknown> | null>(null);
-  const [includeTrace, setIncludeTrace] = useState(false);
+  const [query, setQuery] = useState("Customer A says we missed their availability SLA during the Vendor X incident. What should we do?");
+  const [answer, setAnswer] = useState<MultirepoAnswer | null>(null);
+  const [includeTrace, setIncludeTrace] = useState(true);
 
-  const [authorText, setAuthorText] = useState("Finance definition of ARR for board reporting is active MRR times 12.");
-  const [targetTeam, setTargetTeam] = useState("finance");
+  const [authorText, setAuthorText] = useState("Customer A SLA handling should mention that Vendor X evidence is required before credit language is approved.");
+  const [targetTeam, setTargetTeam] = useState("legal-contracts");
   const [proposal, setProposal] = useState<ProposalResult | null>(null);
   const [commitResult, setCommitResult] = useState<Record<string, unknown> | null>(null);
 
   const [pipeline, setPipeline] = useState<PipelineOutput | null>(null);
-  const [flagSubject, setFlagSubject] = useState("May 4 GMV spike");
-  const [flagDescription, setFlagDescription] = useState("GMV is more than 10x the previous three days. Ops suspects a duplicated marketplace feed order.");
+  const [flagSubject, setFlagSubject] = useState("Vendor X recovery evidence gap");
+  const [flagDescription, setFlagDescription] = useState("Vendor X has not yet provided the final RCA needed for Customer A evidence retention.");
   const [flagResult, setFlagResult] = useState<Record<string, unknown> | null>(null);
   const [resolutionText, setResolutionText] = useState("The marketplace feed duplicated a single order. Exclude ord_005 until the data fix lands.");
 
@@ -334,7 +386,7 @@ export default function Home() {
 
   async function askQuestion() {
     const result = await runAction(() =>
-      api<Record<string, unknown>>("/api/answer", {
+      api<MultirepoAnswer>("/api/multirepo/query", {
         method: "POST",
         body: JSON.stringify({ question: query, include_trace: includeTrace })
       })
@@ -435,7 +487,7 @@ export default function Home() {
             <div className="mark">DM</div>
             <div>
               <h1>DataMeta</h1>
-              <p>Shoppy</p>
+              <p>Generic Enterprise</p>
             </div>
           </div>
 
@@ -482,12 +534,12 @@ export default function Home() {
     <main className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="mark">DM</div>
-          <div>
-            <h1>DataMeta</h1>
-            <p>Shoppy</p>
+            <div className="mark">DM</div>
+            <div>
+              <h1>DataMeta</h1>
+              <p>Generic Enterprise</p>
+            </div>
           </div>
-        </div>
 
         <div className="active-user">
           <span className="field-label">Signed in as</span>
@@ -505,11 +557,8 @@ export default function Home() {
         </div>
 
         <nav className="tabs" aria-label="DataMeta views">
-          <TabButton active={tab === "calculate"} icon={<SlidersHorizontal size={17} />} label="Calculate" onClick={() => setTab("calculate")} />
-          <TabButton active={tab === "query"} icon={<MessageSquareText size={17} />} label="Query" onClick={() => setTab("query")} />
+          <TabButton active={tab === "query"} icon={<MessageSquareText size={17} />} label="Ask Incident Knowledge" onClick={() => setTab("query")} />
           <TabButton active={tab === "author"} icon={<SquarePen size={17} />} label="Author" onClick={() => setTab("author")} />
-          <TabButton active={tab === "pipeline"} icon={<BarChart3 size={17} />} label="Pipeline" onClick={() => setTab("pipeline")} />
-          <TabButton active={tab === "outliers"} icon={<AlertTriangle size={17} />} label="Outliers" onClick={() => setTab("outliers")} />
           <TabButton active={tab === "history"} icon={<History size={17} />} label="History" onClick={() => setTab("history")} />
         </nav>
 
@@ -636,11 +685,16 @@ export default function Home() {
             </label>
             {answer && (
               <div className="answer">
-                <p>{String(answer.answer)}</p>
-                <CitationList citations={(answer.citations as Citation[]) ?? []} />
+                <div className={`message-band ${answer.answerable ? "" : "warn"}`}>
+                  {answer.answerable ? <Check size={18} /> : <AlertTriangle size={18} />}
+                  <span>{answer.answerable ? "Answerable from selected markdown" : "Not answerable from available knowledge"}</span>
+                </div>
+                <p>{answer.answer}</p>
+                <TraceSections result={answer} />
+                <CitationList citations={answer.citations ?? []} />
                 {Boolean(answer.trace) && (
                   <details>
-                    <summary>Trace</summary>
+                    <summary>Raw trace</summary>
                     <pre>{JSON.stringify(answer.trace, null, 2)}</pre>
                   </details>
                 )}
@@ -655,11 +709,12 @@ export default function Home() {
               <label>
                 Team
                 <select value={targetTeam} onChange={(event) => setTargetTeam(event.target.value)}>
-                  <option value="finance">finance</option>
-                  <option value="renewals">renewals</option>
-                  <option value="ops">ops</option>
-                  <option value="analytics">analytics</option>
-                  <option value="data-ownership">data-ownership</option>
+                  <option value="legal-contracts">legal-contracts</option>
+                  <option value="customer-success-ops">customer-success-ops</option>
+                  <option value="platform-operations">platform-operations</option>
+                  <option value="vendor-risk-management">vendor-risk-management</option>
+                  <option value="security-incident-response">security-incident-response</option>
+                  <option value="data-governance">data-governance</option>
                 </select>
               </label>
               <textarea value={authorText} onChange={(event) => setAuthorText(event.target.value)} />
@@ -707,9 +762,9 @@ export default function Home() {
             <div className="toolbar">
               <button className="primary" type="button" onClick={runPipeline} title="Run pipeline">
                 <Play size={17} />
-                Run GMV Ranker
+                Run Runbook
               </button>
-              <span className="pill">orders · net_gmv · Shoppy colors</span>
+              <span className="pill">incident evidence · demo output</span>
             </div>
             {pipeline && (
               <>
@@ -832,8 +887,8 @@ function TabButton({ active, icon, label, onClick }: { active: boolean; icon: Re
 
 function titleForTab(tab: Tab) {
   const titles: Record<Tab, string> = {
-    calculate: "ARR Calculation",
-    query: "Grounded Query",
+    calculate: "Legacy Calculation",
+    query: "Ask Incident Knowledge",
     author: "Knowledge Authoring",
     pipeline: "Runbook Runner",
     outliers: "Outlier Review",
@@ -842,13 +897,67 @@ function titleForTab(tab: Tab) {
   return titles[tab];
 }
 
+function TraceSections({ result }: { result: MultirepoAnswer }) {
+  return (
+    <div className="trace-grid">
+      <TraceList title="Repositories" items={result.shortlisted_repositories} />
+      <TraceList title="Folders" items={result.shortlisted_folders} />
+      <TraceList title="Files" items={result.shortlisted_files} />
+      <div className="trace-panel">
+        <h3>Folder Agents</h3>
+        <div className="list">
+          {result.folder_subagent_findings.map((folder) => (
+            <div className="agent-row" key={folder.folder_path}>
+              <div>
+                <strong>{folder.folder_path}</strong>
+                <p>{folder.agent} · read {folder.full_content_files_read.length} file(s)</p>
+                {folder.agent_error && <small>{folder.agent_error}</small>}
+              </div>
+              {folder.findings.map((finding) => (
+                <blockquote key={`${folder.folder_path}-${finding.file_path}-${finding.heading}`}>
+                  <strong>{finding.title}</strong>
+                  <p>{finding.snippet}</p>
+                  <small>{finding.file_path} · {finding.citation.commit}</small>
+                </blockquote>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TraceList({ title, items }: { title: string; items: ShortlistItem[] }) {
+  return (
+    <div className="trace-panel">
+      <h3>{title}</h3>
+      <div className="list">
+        {items.map((item) => (
+          <div className="doc-row" key={`${title}-${item.path}`}>
+            <div>
+              <strong>{item.title}</strong>
+              <p>{item.path}</p>
+              <small>
+                score {item.hybrid?.score?.toFixed?.(2) ?? "-"} · vector {item.hybrid?.vector_score?.toFixed?.(2) ?? "-"} · keyword{" "}
+                {item.hybrid?.keyword_score?.toFixed?.(2) ?? "-"}
+              </small>
+            </div>
+            <ChevronRight size={16} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function CitationList({ citations }: { citations: Citation[] }) {
   if (!citations.length) return null;
   return (
     <div className="citations">
       {citations.map((citation) => (
-        <span key={`${citation.path}-${citation.commit}`}>
-          {citation.path} · {citation.commit}
+        <span key={`${citation.path}-${citation.heading}-${citation.commit}`}>
+          {citation.file_path ?? citation.path} · {citation.heading ?? citation.title} · {citation.commit}
         </span>
       ))}
     </div>
@@ -861,7 +970,7 @@ function DataTable({ rows }: { rows: Array<{ category: string; net_gmv: number; 
       <thead>
         <tr>
           <th>Category</th>
-          <th>Net GMV</th>
+          <th>Value</th>
           <th>Orders</th>
         </tr>
       </thead>

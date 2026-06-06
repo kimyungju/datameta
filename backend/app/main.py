@@ -57,6 +57,11 @@ class QuestionRequest(BaseModel):
     include_trace: bool = False
 
 
+class IndexReposRequest(BaseModel):
+    force: bool = False
+    sync_neo4j: bool = False
+
+
 class AuthorRequest(BaseModel):
     natural_language: str
     user_id: str | None = None
@@ -138,6 +143,30 @@ def answer(request: QuestionRequest, x_user_id: str | None = Header(default=None
 def ask(request: QuestionRequest, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
     try:
         return service.ask(user_from_header(x_user_id, request.user_id), request.question, request.include_trace)
+    except Exception as error:
+        raise handle_error(error)
+
+
+@app.post("/api/repos/index")
+def index_repos(request: IndexReposRequest) -> dict[str, Any]:
+    try:
+        return service.index_repos(force=request.force, sync_neo4j=request.sync_neo4j)
+    except Exception as error:
+        raise handle_error(error)
+
+
+@app.get("/api/repos/inventory")
+def repo_inventory() -> dict[str, Any]:
+    try:
+        return service.repo_inventory()
+    except Exception as error:
+        raise handle_error(error)
+
+
+@app.post("/api/multirepo/query")
+def multirepo_query(request: QuestionRequest, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
+    try:
+        return service.multirepo_query(user_from_header(x_user_id, request.user_id), request.question, request.include_trace)
     except Exception as error:
         raise handle_error(error)
 
@@ -235,8 +264,8 @@ def mcp_tools() -> list[dict[str, Any]]:
             "name": "datameta_ask",
             "title": "Ask DataMeta",
             "description": (
-                "Natural-language DataMeta entrypoint for Shoppy definitions, runbooks, data-quality concerns, "
-                "and calculation questions. Use this when the user asks in plain English."
+                "Natural-language DataMeta entrypoint for the Generic Enterprise incident-response knowledge graph. "
+                "Use this when the user asks in plain English."
             ),
             "inputSchema": {
                 "type": "object",
@@ -252,7 +281,7 @@ def mcp_tools() -> list[dict[str, Any]]:
         {
             "name": "datameta_retrieve",
             "title": "Retrieve DataMeta Knowledge",
-            "description": "Retrieve Shoppy GraphRAG context with citations and RBAC filtering.",
+            "description": "Retrieve Generic Enterprise GraphRAG context with citations and RBAC filtering.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -267,7 +296,42 @@ def mcp_tools() -> list[dict[str, Any]]:
         {
             "name": "datameta_answer",
             "title": "Answer With DataMeta",
-            "description": "Answer a Shoppy question using committed DataMeta knowledge and citations.",
+            "description": "Answer a Generic Enterprise incident question using committed DataMeta knowledge and citations.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "question": {"type": "string"},
+                    "user_id": user_property,
+                    "include_trace": {"type": "boolean"},
+                },
+                "required": ["question"],
+            },
+            "annotations": {"readOnlyHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "datameta_index_repos",
+            "title": "Index DataMeta Repositories",
+            "description": "Index the simulated Git-backed incident corpus by repository, folder, file metadata, and markdown body chunks.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "force": {"type": "boolean"},
+                    "sync_neo4j": {"type": "boolean"},
+                },
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
+        },
+        {
+            "name": "datameta_repo_inventory",
+            "title": "Show Repository Inventory",
+            "description": "List repositories, folders, files, metadata completeness, embedding status, and Neo4j configuration status.",
+            "inputSchema": {"type": "object", "properties": {}},
+            "annotations": {"readOnlyHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "datameta_multirepo_query",
+            "title": "Ask Incident Knowledge",
+            "description": "Run the strict repository to folder to file GraphRAG query flow with folder subagents, citations, and routing trace.",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -321,81 +385,9 @@ def mcp_tools() -> list[dict[str, Any]]:
             "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
         },
         {
-            "name": "datameta_prepare_calculation",
-            "title": "Prepare Calculation",
-            "description": "Find latest visible definitions, explain options, and list accessible tables.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {"question": {"type": "string"}, "user_id": user_property},
-                "required": ["question"],
-            },
-            "annotations": {"readOnlyHint": True, "openWorldHint": False},
-        },
-        {
-            "name": "datameta_run_calculation",
-            "title": "Run Calculation",
-            "description": "Run a selected committed definition against an accessible table using controlled read-only SQL.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "definition_id": {"type": "string"},
-                    "table": {"type": "string"},
-                    "user_id": user_property,
-                },
-                "required": ["definition_id", "table"],
-            },
-            "annotations": {"readOnlyHint": True, "openWorldHint": False},
-        },
-        {
-            "name": "datameta_flag_outlier",
-            "title": "Flag Outlier",
-            "description": "Flag suspected bad data for owner-team review.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "table_name": {"type": "string"},
-                    "subject": {"type": "string"},
-                    "description": {"type": "string"},
-                    "owner_team": {"type": "string"},
-                    "user_id": user_property,
-                },
-                "required": ["table_name", "subject", "description"],
-            },
-            "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
-        },
-        {
-            "name": "datameta_resolve_flag",
-            "title": "Resolve Outlier Flag",
-            "description": "Resolve a data-quality flag and commit the official note to Git.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "flag_id": {"type": "string"},
-                    "resolution": {"type": "string"},
-                    "user_id": user_property,
-                },
-                "required": ["flag_id", "resolution"],
-            },
-            "annotations": {"readOnlyHint": False, "destructiveHint": True, "openWorldHint": False},
-        },
-        {
-            "name": "datameta_run_pipeline",
-            "title": "Run DataMeta Pipeline",
-            "description": "Execute an approved versioned runbook and return chart/table outputs.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "runbook_id": {"type": "string"},
-                    "variant": {"type": "string"},
-                    "user_id": user_property,
-                },
-            },
-            "annotations": {"readOnlyHint": True, "openWorldHint": False},
-        },
-        {
             "name": "datameta_history",
             "title": "Show DataMeta History",
-            "description": "Show Git commits, documents, flags, and pipeline run history.",
+            "description": "Show Git commits, seeded documents, flags, and proposal history.",
             "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}},
             "annotations": {"readOnlyHint": True, "openWorldHint": False},
         },
@@ -423,6 +415,12 @@ def dispatch_tool(name: str, arguments: dict[str, Any]) -> Any:
         return service.retrieve(arguments.get("user_id"), arguments["question"], bool(arguments.get("include_trace", False)))
     if name == "datameta_answer":
         return service.answer(arguments.get("user_id"), arguments["question"], bool(arguments.get("include_trace", False)))
+    if name == "datameta_index_repos":
+        return service.index_repos(bool(arguments.get("force", False)), bool(arguments.get("sync_neo4j", False)))
+    if name == "datameta_repo_inventory":
+        return service.repo_inventory()
+    if name == "datameta_multirepo_query":
+        return service.multirepo_query(arguments.get("user_id"), arguments["question"], bool(arguments.get("include_trace", True)))
     if name == "datameta_author_proposal":
         return service.create_author_proposal(arguments.get("user_id"), arguments["natural_language"], arguments.get("target_team"))
     if name == "datameta_validate_proposal":
@@ -467,10 +465,9 @@ async def mcp(request: Request) -> dict[str, Any] | Response:
                 "serverInfo": {"name": "datameta", "title": "DataMeta", "version": "0.1.0"},
                 "capabilities": {"tools": {"listChanged": False}},
                 "instructions": (
-                    "Use DataMeta for Shoppy company definitions, runbooks, data-quality flags, and calculations. "
-                    "For plain-language user questions, call datameta_ask first. "
-                    "Call datameta_prepare_calculation before calculating ARR so the analyst can choose Finance or Renewals. "
-                    "Cite returned paths and commit hashes."
+                    "Use DataMeta for Generic Enterprise incident-response knowledge across repositories, folders, and markdown files. "
+                    "For incident questions, call datameta_multirepo_query to route repository to folder to file and cite returned paths and commit hashes. "
+                    "If DataMeta returns not answerable, do not infer missing facts."
                 ),
             }
         elif method == "tools/list":

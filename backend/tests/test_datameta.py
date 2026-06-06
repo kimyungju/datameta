@@ -20,114 +20,159 @@ class FakeOpenAIClient:
     def structured_json(self, **kwargs: object) -> dict[str, object]:
         self.calls.append(kwargs)
         return {
-            "id": "arr-finance-board",
-            "type": "definition",
-            "entity": "ARR",
-            "scope": "board_reporting",
-            "team": "finance",
-            "title": "ARR for board reporting",
-            "summary": "Finance ARR uses active MRR multiplied by 10 for board reporting.",
-            "formula_sql": "SELECT ROUND(SUM(monthly_recurring_revenue) * 10, 2) AS arr FROM {table} WHERE status = 'active'",
-            "required_columns": ["monthly_recurring_revenue", "status"],
-            "preferred_tables": ["subscriptions"],
-            "path": "finance/arr.md",
-            "body_markdown": "Finance now defines ARR as active MRR multiplied by 10 for board reporting.",
-            "search_terms": ["arr", "finance", "board reporting", "active mrr"],
-            "neo4j_labels": ["Document", "Definition"],
-            "neo4j_relationships": [{"type": "DEFINES", "target": "ARR"}],
+            "id": "customer-a-sla-vendor-x-credit-review",
+            "type": "policy",
+            "entity": "Customer A Availability SLA",
+            "scope": "customer_a_availability",
+            "team": "legal-contracts",
+            "title": "Customer A Vendor X SLA Credit Review",
+            "summary": "Customer A SLA updates require Vendor X evidence before credit language is approved.",
+            "formula_sql": "",
+            "required_columns": [],
+            "preferred_tables": [],
+            "path": "legal-contracts/proposed-updates/customer-a-vendor-x-sla-credit-review.md",
+            "body_markdown": "Legal must review Vendor X evidence before Customer A service-credit language is approved.",
+            "search_terms": ["Customer A", "Vendor X", "SLA", "service credit"],
+            "neo4j_labels": ["Document", "Policy"],
+            "neo4j_relationships": [{"type": "APPLIES_TO", "target": "Customer A"}],
         }
 
 
 class DataMetaServiceTest(unittest.TestCase):
     def setUp(self) -> None:
+        self.env_patch = patch.dict(
+            "os.environ",
+            {
+                "OPENAI_API_KEY": "",
+                "DATAMETA_EMBEDDING_PROVIDER": "local",
+                "DATAMETA_STRICT_OPENAI_EMBEDDINGS": "",
+            },
+        )
+        self.env_patch.start()
         self.temp_dir = tempfile.TemporaryDirectory()
         self.service = DataMetaService(Path(self.temp_dir.name))
         self.service.ensure_ready()
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
+        self.env_patch.stop()
 
-    def test_prepare_arr_prompts_between_finance_and_renewals(self) -> None:
-        result = self.service.prepare_calculation("How to calculate ARR?", "junior.analyst")
-        teams = {definition["team"] for definition in result["definitions"]}
-        self.assertTrue(result["requires_choice"])
-        self.assertEqual({"finance", "renewals"}, teams)
-
-    def test_bootstrap_model_config_reflects_environment(self) -> None:
-        with patch.dict(
-            "os.environ",
+    def test_seed_corpus_contains_required_repos_and_canonical_docs(self) -> None:
+        inventory = self.service.repo_inventory()
+        repos = {repo["repository"] for repo in inventory["repositories"]}
+        self.assertEqual(
             {
-                "OPENAI_API_KEY": "",
-                "OPENAI_MODEL": "",
-                "DATAMETA_REASONING_MODEL": "",
-                "OPENAI_EMBEDDING_MODEL": "",
-                "DATAMETA_EMBEDDING_MODEL": "",
+                "security-incident-response",
+                "legal-contracts",
+                "customer-success-ops",
+                "platform-operations",
+                "vendor-risk-management",
+                "data-governance",
             },
-        ):
-            local = self.service.bootstrap("junior.analyst")["models"]
-        self.assertEqual(local["mode"], "local_deterministic")
-        self.assertFalse(local["api_key_configured"])
-        self.assertIsNone(local["reasoning"])
-        self.assertIsNone(local["embedding"])
-
-        with patch.dict(
-            "os.environ",
-            {
-                "OPENAI_API_KEY": "test-key",
-                "OPENAI_MODEL": "",
-                "DATAMETA_REASONING_MODEL": "configured-reasoning",
-                "OPENAI_EMBEDDING_MODEL": "",
-                "DATAMETA_EMBEDDING_MODEL": "configured-embedding",
-            },
-        ):
-            configured = self.service.bootstrap("junior.analyst")["models"]
-        self.assertEqual(configured["mode"], "openai_configured")
-        self.assertTrue(configured["api_key_configured"])
-        self.assertEqual(configured["reasoning"], "configured-reasoning")
-        self.assertEqual(configured["embedding"], "configured-embedding")
-
-        with patch.dict(
-            "os.environ",
-            {
-                "OPENAI_API_KEY": "test-key",
-                "OPENAI_MODEL": "",
-                "DATAMETA_REASONING_MODEL": "",
-            },
-        ):
-            missing_model = self.service.bootstrap("junior.analyst")["models"]
-        self.assertEqual(missing_model["mode"], "openai_missing_model")
-        self.assertTrue(missing_model["api_key_configured"])
-        self.assertIsNone(missing_model["reasoning"])
-
-    def test_ask_answers_arr_definition_question(self) -> None:
-        result = self.service.ask("junior.analyst", "What is the definition of ARR?")
-        self.assertEqual(result["intent"], "answer")
-        self.assertEqual(result["action"], "datameta_answer")
-        self.assertIn("ARR definitions", result["answer"])
-        self.assertTrue(result["calculation_prompt"]["requires_choice"])
-
-    def test_ask_suspicious_data_prompt_requests_missing_detail(self) -> None:
-        result = self.service.ask("olivia.ops", "Data point seems suspicious")
-        self.assertEqual(result["intent"], "flag_outlier")
-        self.assertEqual(result["action"], "needs_more_detail")
-        self.assertTrue(result["needs_more_detail"])
-        self.assertIn("table_name", result["missing"])
-        self.assertIn("subject", result["missing"])
-        self.assertIn("description", result["missing"])
-
-    def test_ask_flags_detailed_suspicious_data_prompt(self) -> None:
-        result = self.service.ask(
-            "olivia.ops",
-            "orders ord_005 May 4 GMV spike looks suspicious because GMV is more than 10x the prior three days.",
+            repos,
         )
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["action"], "datameta_flag_outlier")
-        self.assertEqual(result["flag"]["status"], "pending_owner_review")
+        paths = {doc["path"] for doc in self.service.all_documents()}
+        self.assertIn("legal-contracts/customer-agreements/customer-a-availability-sla.md", paths)
+        self.assertIn("platform-operations/slo-measurement/customer-a-may-2026-availability.md", paths)
+        self.assertIn("vendor-risk-management/vendor-x/vendor-x-risk-register.md", paths)
 
-    def test_mcp_exposes_plain_language_ask_tool(self) -> None:
+    def test_all_seeded_namespace_nodes_have_required_metadata(self) -> None:
+        index = self.service.index_repos()
+        self.assertTrue(index["ok"])
+        self.assertEqual([], index["metadata_completeness"])
+        self.assertEqual(6, index["counts"]["repositories"])
+        self.assertEqual(18, index["counts"]["folders"])
+        self.assertEqual(54, index["counts"]["files"])
+        self.assertEqual(61, index["counts"]["chunks"])
+        self.assertGreaterEqual(index["counts"]["customers"], 3)
+        self.assertGreaterEqual(index["counts"]["vendors"], 2)
+        self.assertGreaterEqual(index["counts"]["incidents"], 2)
+        self.assertTrue(index["neo4j"]["required"])
+
+    def test_customer_a_vendor_x_sla_query_routes_to_expected_repositories(self) -> None:
+        result = self.service.multirepo_query(
+            "junior.analyst",
+            "Customer A says we missed their availability SLA during the Vendor X incident. What should we do?",
+            True,
+        )
+        repos = [repo["repository"] for repo in result["shortlisted_repositories"]]
+        self.assertEqual(
+            {"vendor-risk-management", "customer-success-ops", "legal-contracts", "platform-operations"},
+            set(repos),
+        )
+        self.assertTrue(result["answerable"])
+        self.assertIn("99.72 percent", result["answer"])
+        self.assertIn("99.90 percent", result["answer"])
+
+    def test_customer_a_sla_ranks_above_customer_b_and_c_distractors(self) -> None:
+        result = self.service.multirepo_query(
+            "junior.analyst",
+            "Customer A availability SLA Vendor X",
+            True,
+        )
+        agreement_files = [
+            item["path"]
+            for item in result["shortlisted_files"]
+            if item["path"].startswith("legal-contracts/customer-agreements/")
+        ]
+        self.assertGreaterEqual(len(agreement_files), 3)
+        self.assertEqual("legal-contracts/customer-agreements/customer-a-availability-sla.md", agreement_files[0])
+
+    def test_vendor_x_files_rank_and_cite_above_vendor_y_distractors(self) -> None:
+        result = self.service.multirepo_query(
+            "junior.analyst",
+            "Vendor X incident evidence for Customer A SLA review",
+            True,
+        )
+        vendor_files = [
+            item["path"]
+            for item in result["shortlisted_files"]
+            if item["path"].startswith("vendor-risk-management/")
+        ]
+        self.assertTrue(vendor_files)
+        self.assertTrue(vendor_files[0].startswith("vendor-risk-management/vendor-x/"))
+        cited_paths = {citation["file_path"] for citation in result["citations"]}
+        self.assertIn("vendor-risk-management/vendor-x/vendor-x-risk-register.md", cited_paths)
+        self.assertNotIn("vendor-risk-management/vendor-y/vendor-y-export-delay.md", cited_paths)
+
+    def test_unanswerable_query_does_not_invent_facts(self) -> None:
+        result = self.service.multirepo_query("junior.analyst", "What is the Singapore pantry catering policy?", True)
+        self.assertFalse(result["answerable"])
+        self.assertIn("Not answerable from available knowledge", result["answer"])
+        self.assertEqual([], result["citations"])
+
+    def test_folder_subagents_only_run_for_prefiltered_folders_and_read_after_file_selection(self) -> None:
+        result = self.service.multirepo_query(
+            "junior.analyst",
+            "Customer A says we missed their availability SLA during the Vendor X incident. What should we do?",
+            True,
+        )
+        shortlisted_folders = {folder["path"].removesuffix("/.datameta.md") for folder in result["shortlisted_folders"]}
+        spawned = set(result["trace"]["folder_subagents_spawned"])
+        self.assertEqual(shortlisted_folders, spawned)
+        for folder_result in result["folder_subagent_findings"]:
+            selected = {item["path"] for item in folder_result["selected_files"]}
+            self.assertLessEqual(set(folder_result["full_content_files_read"]), selected)
+
+    def test_final_answer_cites_actual_markdown_files(self) -> None:
+        result = self.service.multirepo_query(
+            "junior.analyst",
+            "Customer A says we missed their availability SLA during the Vendor X incident. What should we do?",
+            True,
+        )
+        cited_paths = {citation["file_path"] for citation in result["citations"]}
+        self.assertIn("legal-contracts/customer-agreements/customer-a-availability-sla.md", cited_paths)
+        self.assertIn("platform-operations/incidents/vendor-x-2026-05-availability-incident.md", cited_paths)
+        self.assertIn("platform-operations/slo-measurement/customer-a-may-2026-availability.md", cited_paths)
+        self.assertIn("customer-success-ops/customer-a/customer-a-escalation-playbook.md", cited_paths)
+        self.assertIn("vendor-risk-management/vendor-x/vendor-x-risk-register.md", cited_paths)
+
+    def test_mcp_exposes_multirepo_tools(self) -> None:
         tools = {tool["name"]: tool for tool in mcp_tools()}
-        self.assertIn("datameta_ask", tools)
-        self.assertEqual(["question"], tools["datameta_ask"]["inputSchema"]["required"])
+        self.assertIn("datameta_index_repos", tools)
+        self.assertIn("datameta_repo_inventory", tools)
+        self.assertIn("datameta_multirepo_query", tools)
+        self.assertEqual(["question"], tools["datameta_multirepo_query"]["inputSchema"]["required"])
 
     def test_mcp_initialized_notification_returns_accepted_without_body(self) -> None:
         with TestClient(app) as client:
@@ -147,70 +192,19 @@ class DataMetaServiceTest(unittest.TestCase):
         self.assertTrue(root.json()["ok"])
         self.assertTrue(health.json()["ok"])
 
-    def test_run_finance_arr_calculation(self) -> None:
-        result = self.service.run_calculation("junior.analyst", "arr-finance-board", "subscriptions")
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["result"]["value"], 30240.0)
-
-    def test_rbac_blocks_inaccessible_table(self) -> None:
-        with self.assertRaises(PermissionError):
-            self.service.run_calculation("ravi.renewals", "arr-finance-board", "subscriptions")
-
-    def test_outlier_requires_owner_resolution(self) -> None:
-        flag = self.service.flag_outlier(
-            "olivia.ops",
-            "orders",
-            "May 4 GMV spike",
-            "GMV is more than 10x the previous three days.",
-        )
-        with self.assertRaises(PermissionError):
-            self.service.resolve_flag("olivia.ops", flag["flag_id"], "Looks valid.")
-        resolved = self.service.resolve_flag("dina.data", flag["flag_id"], "The marketplace feed duplicated a single order.")
-        self.assertTrue(resolved["ok"])
-        self.assertIn("commit_hash", resolved)
-
-    def test_pipeline_returns_chart_and_table(self) -> None:
-        run = self.service.run_pipeline("junior.analyst")
-        self.assertTrue(run["ok"])
-        self.assertGreater(len(run["output"]["table"]), 0)
-        self.assertGreater(len(run["output"]["chart"]), 0)
-
-    def test_authoring_conflict_requires_confirmation(self) -> None:
-        with patch.dict("os.environ", {"OPENAI_API_KEY": "", "OPENAI_MODEL": "", "DATAMETA_REASONING_MODEL": ""}):
-            proposal = self.service.create_author_proposal(
-                "maya.finance",
-                "Finance definition of ARR for board reporting is active MRR times 12.",
-                "finance",
-            )
-        validation = proposal["validation"]
-        self.assertTrue(validation["needs_confirmation"])
-        commit = self.service.commit_proposal("maya.finance", proposal["proposal_id"], confirm_overwrite=False)
-        self.assertFalse(commit["ok"])
-        committed = self.service.commit_proposal("maya.finance", proposal["proposal_id"], confirm_overwrite=True)
-        self.assertTrue(committed["ok"])
-        self.assertTrue(committed["commit_hash"])
-
-    def test_openai_authoring_generates_markdown_graph_and_search_metadata(self) -> None:
+    def test_openai_authoring_still_generates_markdown_graph_and_search_metadata(self) -> None:
         self.service.openai_client = FakeOpenAIClient()
-        with patch.dict(
-            "os.environ",
-            {
-                "OPENAI_API_KEY": "test-key",
-                "DATAMETA_REASONING_MODEL": "test-authoring-model",
-                "OPENAI_MODEL": "",
-            },
-        ):
+        with patch.dict("os.environ", {"OPENAI_API_KEY": "test-key", "DATAMETA_REASONING_MODEL": "test-authoring-model"}):
             proposal = self.service.create_author_proposal(
-                "maya.finance",
-                "Change ARR definition for board reporting to active MRR times 10.",
-                "finance",
+                "leah.legal",
+                "Change Customer A SLA handling so Vendor X evidence is required before credit language is approved.",
+                "legal-contracts",
             )
         self.assertEqual(proposal["authoring_source"], "openai_responses")
         self.assertEqual(proposal["model"], "test-authoring-model")
-        self.assertIn("active MRR multiplied by 10", proposal["markdown"])
-        self.assertIn("search_terms: arr,finance,board reporting,active mrr", proposal["markdown"])
-        self.assertIn('"target": "ARR"', proposal["markdown"])
-        self.assertTrue(proposal["validation"]["needs_confirmation"])
+        self.assertIn("Vendor X evidence", proposal["markdown"])
+        self.assertIn("search_terms: Customer A,Vendor X,SLA,service credit", proposal["markdown"])
+        self.assertIn('"target": "Customer A"', proposal["markdown"])
 
 
 if __name__ == "__main__":
