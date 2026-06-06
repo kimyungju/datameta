@@ -2934,43 +2934,25 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
         return {"repositories": repos, "index": self._index_summary(index)}
 
     def _phrase_boost(self, query: str, text: str) -> float:
-        query_lower = query.lower()
-        text_lower = text.lower()
-        query_phrase = query_lower.replace("-", " ")
-        text_phrase = text_lower.replace("-", " ")
+        index = self._multirepo_index
+        if not index:
+            return 0.0
+        entities = index.get("entities", {})
+        query_phrase = query.lower().replace("-", " ")
+        text_phrase = text.lower().replace("-", " ")
         boost = 0.0
-        for phrase in (
-            "customer a",
-            "customer b",
-            "customer c",
-            "vendor x",
-            "vendor y",
-            "availability sla",
-            "service credit",
-            "missed sla",
-            "sla miss",
-            "availability incident",
-            "what should we do",
-        ):
-            if phrase in query_phrase and phrase in text_phrase:
-                boost += 2.5
-        if "what should we do" in query_phrase and ("customer success" in text_phrase or "escalation" in text_phrase):
-            boost += 3.0
-        if "vendor x" in query_phrase and ("vendor risk" in text_phrase or "contractual rca" in text_phrase):
-            boost += 3.0
-        if ("missed" in query_phrase or "sla" in query_phrase) and ("complaint" in text_phrase or "service credit" in text_phrase):
-            boost += 2.0
-        if "availability" in query_phrase and ("slo measurement" in text_phrase or "measured availability" in text_phrase):
-            boost += 2.0
-        if "customer a" in query_phrase and ("customer agreements" in text_phrase or "customer a" in text_phrase):
-            boost += 2.0
-        for family, values in {"customer": ("a", "b", "c"), "vendor": ("x", "y")}.items():
-            requested = [value for value in values if f"{family} {value}" in query_phrase]
+        for family in ("customers", "vendors", "slas", "incidents"):
+            members = [member.lower().replace("-", " ") for member in entities.get(family, [])]
+            requested = [member for member in members if member and member in query_phrase]
             if not requested:
                 continue
-            for value in values:
-                phrase = f"{family} {value}"
-                if value not in requested and phrase in text_phrase:
+            for member in members:
+                if not member:
+                    continue
+                if member in requested:
+                    if member in text_phrase:
+                        boost += 2.5
+                elif member in text_phrase:
                     boost -= 1.0
         return boost
 
@@ -3025,28 +3007,20 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
         return best_heading, snippet
 
     def _doc_directly_supports_query(self, query: str, doc: dict[str, Any]) -> bool:
+        index = self._multirepo_index
+        entities = index.get("entities", {}) if index else {}
         query_phrase = query.lower().replace("-", " ")
         text_phrase = f"{self._metadata_text(doc)} {doc['body']}".lower().replace("-", " ")
-        requested_customers = [name for name in ("customer a", "customer b", "customer c") if name in query_phrase]
-        if requested_customers:
-            doc_customers = [customer.lower().replace("-", " ") for customer in doc.get("customers", [])]
-            if doc_customers and not any(customer in doc_customers for customer in requested_customers):
+        for family, doc_key in (("customers", "customers"), ("vendors", "vendors")):
+            members = [member.lower().replace("-", " ") for member in entities.get(family, [])]
+            requested = [member for member in members if member and member in query_phrase]
+            if not requested:
+                continue
+            doc_members = [value.lower().replace("-", " ") for value in doc.get(doc_key, [])]
+            if doc_members and not any(member in doc_members for member in requested):
                 return False
-            if not any(customer in text_phrase for customer in requested_customers):
+            if not any(member in text_phrase for member in requested):
                 return False
-        requested_vendors = [name for name in ("vendor x", "vendor y") if name in query_phrase]
-        vendor_support = False
-        if requested_vendors:
-            doc_vendors = [vendor.lower().replace("-", " ") for vendor in doc.get("vendors", [])]
-            if doc_vendors and not any(vendor in doc_vendors for vendor in requested_vendors):
-                return False
-            if not any(vendor in text_phrase for vendor in requested_vendors):
-                return False
-            vendor_support = True
-        if "sla" in query_phrase and "sla" not in text_phrase and not vendor_support:
-            return False
-        if "availability" in query_phrase and "availability" not in text_phrase and not vendor_support:
-            return False
         return True
 
     def _folder_agent_with_openai(self, query: str, folder: dict[str, Any], selected_files: list[dict[str, Any]]) -> dict[str, Any]:
@@ -3165,31 +3139,60 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             "title": doc["title"],
         }
 
-    def _synthesize_multirepo_answer(self, question: str, findings: list[dict[str, Any]]) -> tuple[bool, str]:
-        if not findings:
+    def _synthesize_multirepo_answer(self, question: str, items: list[dict[str, Any]]) -> tuple[bool, str]:
+        if not items:
             return False, (
                 "Not answerable from available knowledge. DataMeta did not find a relevant repository, folder, "
                 "or file path in the configured corpus, so it will not infer an answer."
             )
-        text = " ".join(f"{finding['title']} {finding['summary']} {finding['snippet']}" for finding in findings).lower()
-        question_lower = question.lower()
-        required_signals = ["customer a", "vendor x", "availability", "sla"]
-        if all(signal in question_lower for signal in required_signals) and all(signal in text for signal in required_signals):
-            return True, (
-                "Customer A's complaint is answerable from the available knowledge. Treat this as a likely availability SLA miss review: "
-                "the Customer A SLA commits to 99.90 percent monthly production API availability, Vendor X is not an excluded dependency for Customer A, "
-                "and Platform Operations measured Customer A at 99.72 percent for May 2026 after including the Vendor X incident. "
-                "Next, Customer Success should acknowledge the complaint without conceding liability, Legal should approve SLA and service-credit language, "
-                "Platform Operations should provide the incident timeline and final RCA inputs, Vendor Risk should obtain Vendor X's contractual RCA and evidence, "
-                "and Data Governance should preserve the contract, measurement, incident, notice, and vendor evidence pack."
-            )
+        text = " ".join(
+            f"{item.get('title', '')} {item.get('summary', '')} {item.get('snippet', '')}" for item in items
+        ).lower()
         direct_terms = sum(1 for term in tokenize(question) if term in tokenize(text))
         if direct_terms < 3:
             return False, (
-                "Not answerable from available knowledge. DataMeta found some weak metadata overlap, but the selected markdown files did not directly support an answer."
+                "Not answerable from available knowledge. DataMeta found some weak overlap, but the selected "
+                "evidence did not directly support an answer."
             )
-        summaries = "; ".join(f"{finding['title']}: {finding['summary']}" for finding in findings[:5])
-        return True, f"DataMeta found directly relevant knowledge in the selected files: {summaries}."
+        config = model_config()
+        if config["mode"] == "openai_configured" and configured_env_value("DATAMETA_DISABLE_OPENAI_SUBAGENTS") != "1":
+            try:
+                return True, self._synthesize_answer_with_openai(question, items, config)
+            except Exception:
+                pass
+        summaries = "; ".join(
+            f"{item.get('title', '')}: {item.get('summary') or item.get('snippet', '')}".strip()
+            for item in items[:5]
+        )
+        return True, f"Based on the retrieved evidence: {summaries}."
+
+    def _synthesize_answer_with_openai(self, question: str, items: list[dict[str, Any]], config: dict[str, Any]) -> str:
+        client = self._authoring_client(config)
+        evidence = [
+            {
+                "title": item.get("title", ""),
+                "summary": item.get("summary", ""),
+                "snippet": item.get("snippet", ""),
+                "path": (item.get("citation") or {}).get("file_path") or item.get("path", ""),
+            }
+            for item in items[:8]
+        ]
+        system = (
+            "You are DataMeta's retrieval answer synthesizer. Use ONLY the supplied evidence to answer. "
+            "Do not use outside knowledge. If the evidence does not support an answer, say it is not answerable."
+        )
+        user = json.dumps({"question": question, "evidence": evidence}, indent=2, sort_keys=True)
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "required": ["answer"],
+            "properties": {"answer": {"type": "string"}},
+        }
+        result = client.structured_json(system=system, user=user, schema_name="datameta_rag_answer", schema=schema)
+        answer = str(result.get("answer", "")).strip()
+        if not answer:
+            raise RuntimeError("OpenAI synthesis returned an empty answer")
+        return answer
 
     def _merge_hybrid_rows(self, vector_rows, chunk_rows, limit):
         vector_high = max((float(r.get("score") or 0.0) for r in vector_rows), default=0.0)
