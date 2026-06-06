@@ -57,6 +57,17 @@ class QuestionRequest(BaseModel):
     include_trace: bool = False
 
 
+class MarkdownSearchRequest(BaseModel):
+    query: str = ""
+    user_id: str | None = None
+    limit: int = 50
+
+
+class MarkdownReadRequest(BaseModel):
+    path: str
+    user_id: str | None = None
+
+
 class IndexReposRequest(BaseModel):
     force: bool = False
     sync_neo4j: bool = False
@@ -171,6 +182,22 @@ def multirepo_query(request: QuestionRequest, x_user_id: str | None = Header(def
         raise handle_error(error)
 
 
+@app.post("/api/markdown/search")
+def search_markdown(request: MarkdownSearchRequest, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
+    try:
+        return service.search_markdown_files(user_from_header(x_user_id, request.user_id), request.query, request.limit)
+    except Exception as error:
+        raise handle_error(error)
+
+
+@app.post("/api/markdown/read")
+def read_markdown(request: MarkdownReadRequest, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
+    try:
+        return service.read_markdown_file(user_from_header(x_user_id, request.user_id), request.path)
+    except Exception as error:
+        raise handle_error(error)
+
+
 @app.post("/api/author/proposal")
 def author_proposal(request: AuthorRequest, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
     try:
@@ -250,9 +277,9 @@ def run_pipeline(request: PipelineRunRequest, x_user_id: str | None = Header(def
 
 
 @app.get("/api/history")
-def history(path: str | None = None) -> dict[str, Any]:
+def history(path: str | None = None, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
     try:
-        return service.history(path)
+        return service.history(path, x_user_id)
     except Exception as error:
         raise handle_error(error)
 
@@ -330,7 +357,7 @@ def mcp_tools() -> list[dict[str, Any]]:
         },
         {
             "name": "datameta_multirepo_query",
-            "title": "Ask Incident Knowledge",
+            "title": "Query",
             "description": "Run the strict repository to folder to file GraphRAG query flow with folder subagents, citations, and routing trace.",
             "inputSchema": {
                 "type": "object",
@@ -340,6 +367,34 @@ def mcp_tools() -> list[dict[str, Any]]:
                     "include_trace": {"type": "boolean"},
                 },
                 "required": ["question"],
+            },
+            "annotations": {"readOnlyHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "datameta_search_markdown",
+            "title": "Search Markdown",
+            "description": "Search markdown files visible to the selected user across accessible repositories and folders.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string"},
+                    "limit": {"type": "integer"},
+                    "user_id": user_property,
+                },
+            },
+            "annotations": {"readOnlyHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "datameta_read_markdown_file",
+            "title": "Read Markdown File",
+            "description": "Read one accessible markdown file by repository-relative path.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "user_id": user_property,
+                },
+                "required": ["path"],
             },
             "annotations": {"readOnlyHint": True, "openWorldHint": False},
         },
@@ -388,7 +443,7 @@ def mcp_tools() -> list[dict[str, Any]]:
             "name": "datameta_history",
             "title": "Show DataMeta History",
             "description": "Show Git commits, seeded documents, flags, and proposal history.",
-            "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}}},
+            "inputSchema": {"type": "object", "properties": {"path": {"type": "string"}, "user_id": user_property}},
             "annotations": {"readOnlyHint": True, "openWorldHint": False},
         },
     ]
@@ -421,6 +476,10 @@ def dispatch_tool(name: str, arguments: dict[str, Any]) -> Any:
         return service.repo_inventory()
     if name == "datameta_multirepo_query":
         return service.multirepo_query(arguments.get("user_id"), arguments["question"], bool(arguments.get("include_trace", True)))
+    if name == "datameta_search_markdown":
+        return service.search_markdown_files(arguments.get("user_id"), arguments.get("query", ""), int(arguments.get("limit", 50)))
+    if name == "datameta_read_markdown_file":
+        return service.read_markdown_file(arguments.get("user_id"), arguments["path"])
     if name == "datameta_author_proposal":
         return service.create_author_proposal(arguments.get("user_id"), arguments["natural_language"], arguments.get("target_team"))
     if name == "datameta_validate_proposal":
@@ -444,7 +503,7 @@ def dispatch_tool(name: str, arguments: dict[str, Any]) -> Any:
     if name == "datameta_run_pipeline":
         return service.run_pipeline(arguments.get("user_id"), arguments.get("runbook_id", "gmv-category-ranker"), arguments.get("variant"))
     if name == "datameta_history":
-        return service.history(arguments.get("path"))
+        return service.history(arguments.get("path"), arguments.get("user_id"))
     raise ValueError(f"Unknown DataMeta tool: {name}")
 
 

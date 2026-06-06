@@ -37,7 +37,6 @@ class FakeOpenAIClient:
             "neo4j_relationships": [{"type": "APPLIES_TO", "target": "Customer A"}],
         }
 
-
 class DataMetaServiceTest(unittest.TestCase):
     def setUp(self) -> None:
         self.env_patch = patch.dict(
@@ -141,6 +140,17 @@ class DataMetaServiceTest(unittest.TestCase):
         self.assertIn("Not answerable from available knowledge", result["answer"])
         self.assertEqual([], result["citations"])
 
+    def test_markdown_search_and_read_are_access_controlled(self) -> None:
+        search = self.service.search_markdown_files("leah.legal", "Customer A SLA", 20)
+        paths = {file["path"] for file in search["files"]}
+        self.assertIn("legal-contracts/customer-agreements/customer-a-availability-sla.md", paths)
+        self.assertNotIn("security-incident-response/triage-runbooks/vendor-outage-triage.md", paths)
+
+        file = self.service.read_markdown_file("leah.legal", "legal-contracts/customer-agreements/customer-a-availability-sla.md")
+        self.assertIn("Customer A's enterprise agreement", file["markdown"])
+        with self.assertRaises(PermissionError):
+            self.service.read_markdown_file("leah.legal", "security-incident-response/triage-runbooks/vendor-outage-triage.md")
+
     def test_folder_subagents_only_run_for_prefiltered_folders_and_read_after_file_selection(self) -> None:
         result = self.service.multirepo_query(
             "junior.analyst",
@@ -172,6 +182,8 @@ class DataMetaServiceTest(unittest.TestCase):
         self.assertIn("datameta_index_repos", tools)
         self.assertIn("datameta_repo_inventory", tools)
         self.assertIn("datameta_multirepo_query", tools)
+        self.assertIn("datameta_search_markdown", tools)
+        self.assertIn("datameta_read_markdown_file", tools)
         self.assertEqual(["question"], tools["datameta_multirepo_query"]["inputSchema"]["required"])
 
     def test_mcp_initialized_notification_returns_accepted_without_body(self) -> None:

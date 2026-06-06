@@ -693,6 +693,86 @@ th {
   gap: 12px;
 }
 
+.files-view {
+  align-content: start;
+}
+
+.files-browser {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: minmax(280px, 0.8fr) minmax(0, 1.2fr);
+  align-items: start;
+}
+
+.file-list,
+.markdown-reader {
+  min-height: 460px;
+  overflow: hidden;
+}
+
+.file-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  padding: 13px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.file-row:last-child {
+  border-bottom: 0;
+}
+
+.file-row.selected {
+  background: #eef4ff;
+}
+
+.file-row > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.file-row strong,
+.reader-head h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-row strong {
+  display: block;
+  white-space: nowrap;
+}
+
+.reader-head {
+  padding: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.reader-head h3 {
+  margin: 2px 0 4px;
+  white-space: nowrap;
+}
+
+.markdown-reader {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+
+.markdown-reader .markdown-preview {
+  max-height: 560px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .trace-grid {
   display: grid;
   gap: 14px;
@@ -784,6 +864,7 @@ th {
 
   .history-grid,
   .trace-grid,
+  .files-browser,
   .split,
   .definition-grid {
     grid-template-columns: 1fr;

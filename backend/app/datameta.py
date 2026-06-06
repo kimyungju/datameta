@@ -2989,8 +2989,9 @@ Resolution:
             runs.append(item)
         return runs
 
-    def history(self, path: str | None = None) -> dict[str, Any]:
+    def history(self, path: str | None = None, user_id: str | None = None) -> dict[str, Any]:
         self.ensure_ready()
+        user = self.get_user(user_id)
         args = ["log", "--pretty=%H%x1f%an%x1f%ae%x1f%aI%x1f%s", "--name-only"]
         if path:
             args.extend(["--", path])
@@ -3029,11 +3030,93 @@ Resolution:
                     "summary": doc["summary"],
                     "citation": self._citation(doc),
                 }
-                for doc in self.all_documents()
+                for doc in self.visible_documents(user)
             ],
             "flags": self.list_flags(),
             "pipeline_runs": self.list_pipeline_runs(),
         }
+
+    def _markdown_search_payload(
+        self,
+        doc: dict[str, Any],
+        query: str,
+        score: float,
+        keyword_hits: list[str],
+        *,
+        backend: str,
+    ) -> dict[str, Any]:
+        heading, snippet = self._best_snippet(query or doc["title"], doc)
+        return {
+            "score": score,
+            "keyword_hits": keyword_hits,
+            "backend": backend,
+            "id": doc["id"],
+            "path": doc["path"],
+            "repository": doc["repository"],
+            "folder": doc["folder"],
+            "metadata_level": doc["metadata_level"],
+            "team": doc["team"],
+            "type": doc["type"],
+            "title": doc["title"],
+            "summary": doc["summary"],
+            "customers": doc["customers"],
+            "vendors": doc["vendors"],
+            "heading": heading,
+            "snippet": snippet,
+            "citation": self._citation(doc),
+        }
+
+    def search_markdown_files(self, user_id: str | None, query: str = "", limit: int = 50) -> dict[str, Any]:
+        user = self.get_user(user_id)
+        safe_limit = max(1, min(int(limit or 50), 200))
+        query_tokens = tokenize(query)
+        results = []
+        for doc in self.visible_documents(user):
+            haystack = " ".join([doc["path"], doc["title"], doc["summary"], doc["entity"], doc["scope"], doc["body"]])
+            doc_tokens = tokenize(haystack)
+            keyword_hits = sorted(query_tokens & doc_tokens)
+            if query_tokens:
+                score = len(keyword_hits)
+                if query.lower() in haystack.lower():
+                    score += 5
+                if score <= 0:
+                    continue
+            else:
+                score = 0
+            results.append(self._markdown_search_payload(doc, query, score, keyword_hits, backend="local"))
+        results.sort(key=lambda item: (-item["score"], item["path"]))
+        return {
+            "query": query,
+            "user": self._user_payload(user),
+            "files": results[:safe_limit],
+            "total": len(results),
+            "backend": "local",
+        }
+
+    def read_markdown_file(self, user_id: str | None, path: str) -> dict[str, Any]:
+        user = self.get_user(user_id)
+        normalized = path.strip().lstrip("/")
+        if not normalized or ".." in Path(normalized).parts or not normalized.endswith(".md"):
+            raise ValueError("Markdown path must be a repository-relative .md file")
+        for doc in self.visible_documents(user):
+            if doc["path"] == normalized:
+                return {
+                    "id": doc["id"],
+                    "path": doc["path"],
+                    "repository": doc["repository"],
+                    "folder": doc["folder"],
+                    "metadata_level": doc["metadata_level"],
+                    "team": doc["team"],
+                    "type": doc["type"],
+                    "title": doc["title"],
+                    "summary": doc["summary"],
+                    "metadata": doc["metadata"],
+                    "body": doc["body"],
+                    "markdown": doc["text"],
+                    "citation": self._citation(doc),
+                    "user": self._user_payload(user),
+                }
+        raise PermissionError(f"{user.name} cannot access markdown file {normalized}")
 
     def bootstrap(self, user_id: str | None = None) -> dict[str, Any]:
         user = self.get_user(user_id)
@@ -3044,7 +3127,7 @@ Resolution:
             "user": self._user_payload(user),
             "users": self.users(),
             "schema": self.warehouse_schema(user),
-            "history": self.history(),
+            "history": self.history(user_id=user.id),
             "inventory": self.repo_inventory(),
             "mcp": {
                 "url": "http://127.0.0.1:8000/mcp",
@@ -3061,6 +3144,8 @@ Resolution:
             "datameta_index_repos",
             "datameta_repo_inventory",
             "datameta_multirepo_query",
+            "datameta_search_markdown",
+            "datameta_read_markdown_file",
             "datameta_author_proposal",
             "datameta_validate_proposal",
             "datameta_commit_proposal",

@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Database,
   FileClock,
+  FileText,
   GitCommitHorizontal,
   History,
   KeyRound,
@@ -173,7 +174,7 @@ type ValidationResult = {
 
 type ApiError = { detail?: string };
 
-type Tab = "calculate" | "query" | "author" | "pipeline" | "outliers" | "history";
+type Tab = "calculate" | "query" | "files" | "author" | "pipeline" | "outliers" | "history";
 
 type ShortlistItem = {
   id: string;
@@ -221,6 +222,47 @@ type MultirepoAnswer = {
   trace?: Record<string, unknown>;
 };
 
+type MarkdownFileSummary = {
+  score: number;
+  keyword_hits: string[];
+  id: string;
+  path: string;
+  repository: string;
+  folder: string;
+  metadata_level: string;
+  team: string;
+  type: string;
+  title: string;
+  summary: string;
+  customers: string[];
+  vendors: string[];
+  heading: string;
+  snippet: string;
+  citation: Citation;
+};
+
+type MarkdownSearchResponse = {
+  query: string;
+  files: MarkdownFileSummary[];
+  total: number;
+};
+
+type MarkdownFileDetail = {
+  id: string;
+  path: string;
+  repository: string;
+  folder: string;
+  metadata_level: string;
+  team: string;
+  type: string;
+  title: string;
+  summary: string;
+  metadata: Record<string, string>;
+  body: string;
+  markdown: string;
+  citation: Citation;
+};
+
 function money(value: number | undefined) {
   if (typeof value !== "number") return "-";
   return new Intl.NumberFormat("en-US", {
@@ -266,6 +308,9 @@ export default function Home() {
   const [query, setQuery] = useState("Customer A says we missed their availability SLA during the Vendor X incident. What should we do?");
   const [answer, setAnswer] = useState<MultirepoAnswer | null>(null);
   const [includeTrace, setIncludeTrace] = useState(true);
+  const [fileSearch, setFileSearch] = useState("");
+  const [fileResults, setFileResults] = useState<MarkdownFileSummary[]>([]);
+  const [selectedFile, setSelectedFile] = useState<MarkdownFileDetail | null>(null);
 
   const [authorText, setAuthorText] = useState("Customer A SLA handling should mention that Vendor X evidence is required before credit language is approved.");
   const [targetTeam, setTargetTeam] = useState("legal-contracts");
@@ -332,6 +377,8 @@ export default function Home() {
     setPrepare(null);
     setCalculation(null);
     setAnswer(null);
+    setFileResults([]);
+    setSelectedFile(null);
     refresh(userId).catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)));
   }, [userId]);
 
@@ -347,6 +394,8 @@ export default function Home() {
     setPrepare(null);
     setCalculation(null);
     setAnswer(null);
+    setFileResults([]);
+    setSelectedFile(null);
     setProposal(null);
     setCommitResult(null);
     setPipeline(null);
@@ -392,6 +441,29 @@ export default function Home() {
       })
     );
     if (result) setAnswer(result);
+  }
+
+  async function searchMarkdown(nextQuery = fileSearch) {
+    const result = await runAction(() =>
+      api<MarkdownSearchResponse>("/api/markdown/search", {
+        method: "POST",
+        body: JSON.stringify({ query: nextQuery, limit: 100 })
+      })
+    );
+    if (result) {
+      setFileResults(result.files);
+      if (!result.files.some((file) => file.path === selectedFile?.path)) setSelectedFile(null);
+    }
+  }
+
+  async function openMarkdownFile(path: string) {
+    const result = await runAction(() =>
+      api<MarkdownFileDetail>("/api/markdown/read", {
+        method: "POST",
+        body: JSON.stringify({ path })
+      })
+    );
+    if (result) setSelectedFile(result);
   }
 
   async function draftProposal() {
@@ -557,7 +629,16 @@ export default function Home() {
         </div>
 
         <nav className="tabs" aria-label="DataMeta views">
-          <TabButton active={tab === "query"} icon={<MessageSquareText size={17} />} label="Ask Incident Knowledge" onClick={() => setTab("query")} />
+          <TabButton active={tab === "query"} icon={<MessageSquareText size={17} />} label="Query" onClick={() => setTab("query")} />
+          <TabButton
+            active={tab === "files"}
+            icon={<FileText size={17} />}
+            label="Files"
+            onClick={() => {
+              setTab("files");
+              if (!fileResults.length) searchMarkdown().catch(() => undefined);
+            }}
+          />
           <TabButton active={tab === "author"} icon={<SquarePen size={17} />} label="Author" onClick={() => setTab("author")} />
           <TabButton active={tab === "history"} icon={<History size={17} />} label="History" onClick={() => setTab("history")} />
         </nav>
@@ -700,6 +781,65 @@ export default function Home() {
                 )}
               </div>
             )}
+          </section>
+        )}
+
+        {tab === "files" && (
+          <section className="view files-view">
+            <div className="command-row">
+              <input
+                value={fileSearch}
+                onChange={(event) => setFileSearch(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") searchMarkdown().catch(() => undefined);
+                }}
+                placeholder="Search markdown files"
+              />
+              <button className="primary" type="button" onClick={() => searchMarkdown()} title="Search files">
+                <Search size={17} />
+                Search
+              </button>
+            </div>
+
+            <div className="files-browser">
+              <div className="list file-list">
+                {fileResults.map((file) => (
+                  <button
+                    className={`file-row ${selectedFile?.path === file.path ? "selected" : ""}`}
+                    key={file.path}
+                    type="button"
+                    onClick={() => openMarkdownFile(file.path)}
+                  >
+                    <div>
+                      <strong>{file.title}</strong>
+                      <p>{file.path}</p>
+                      <small>
+                        {file.repository} · {file.folder || "repository"} · {file.metadata_level} · {file.citation.commit}
+                      </small>
+                    </div>
+                    <ChevronRight size={16} />
+                  </button>
+                ))}
+                {!fileResults.length && <Empty icon={<FileText size={22} />} label="No files loaded" />}
+              </div>
+
+              <div className="markdown-reader">
+                {selectedFile ? (
+                  <>
+                    <div className="reader-head">
+                      <div>
+                        <p className="eyebrow">{selectedFile.repository} · {selectedFile.folder || "repository"}</p>
+                        <h3>{selectedFile.title}</h3>
+                        <small>{selectedFile.path} · {selectedFile.citation.commit}</small>
+                      </div>
+                    </div>
+                    <pre className="markdown-preview">{selectedFile.markdown}</pre>
+                  </>
+                ) : (
+                  <Empty icon={<BookOpenText size={22} />} label="Select a markdown file" />
+                )}
+              </div>
+            </div>
           </section>
         )}
 
@@ -888,7 +1028,8 @@ function TabButton({ active, icon, label, onClick }: { active: boolean; icon: Re
 function titleForTab(tab: Tab) {
   const titles: Record<Tab, string> = {
     calculate: "Legacy Calculation",
-    query: "Ask Incident Knowledge",
+    query: "Query",
+    files: "Files",
     author: "Knowledge Authoring",
     pipeline: "Runbook Runner",
     outliers: "Outlier Review",
