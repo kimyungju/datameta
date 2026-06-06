@@ -9,6 +9,7 @@ import {
   Database,
   FileClock,
   FileText,
+  Folder,
   GitCommitHorizontal,
   History,
   KeyRound,
@@ -305,14 +306,17 @@ export default function Home() {
   const [selectedTable, setSelectedTable] = useState("");
   const [calculation, setCalculation] = useState<CalculationResult | null>(null);
 
-  const [query, setQuery] = useState("Customer A says we missed their availability SLA during the Vendor X incident. What should we do?");
+  const [query, setQuery] = useState("");
   const [answer, setAnswer] = useState<MultirepoAnswer | null>(null);
   const [includeTrace, setIncludeTrace] = useState(true);
   const [fileSearch, setFileSearch] = useState("");
+  const [submittedSearch, setSubmittedSearch] = useState("");
+  const [browseRepo, setBrowseRepo] = useState<string | null>(null);
+  const [browseFolder, setBrowseFolder] = useState<string | null>(null);
   const [fileResults, setFileResults] = useState<MarkdownFileSummary[]>([]);
   const [selectedFile, setSelectedFile] = useState<MarkdownFileDetail | null>(null);
 
-  const [authorText, setAuthorText] = useState("Customer A SLA handling should mention that Vendor X evidence is required before credit language is approved.");
+  const [authorText, setAuthorText] = useState("");
   const [targetTeam, setTargetTeam] = useState("legal-contracts");
   const [proposal, setProposal] = useState<ProposalResult | null>(null);
   const [commitResult, setCommitResult] = useState<Record<string, unknown> | null>(null);
@@ -325,6 +329,78 @@ export default function Home() {
 
   const activeUser = useMemo(() => bootstrap?.users.find((user) => user.id === userId), [bootstrap, userId]);
   const loginUser = useMemo(() => bootstrap?.users.find((user) => user.id === loginUserId), [bootstrap, loginUserId]);
+
+  const repositories = useMemo(() => {
+    const map = new Map<string, { name: string; title: string; summary: string; folders: Set<string>; fileCount: number }>();
+    for (const file of fileResults) {
+      let entry = map.get(file.repository);
+      if (!entry) {
+        entry = { name: file.repository, title: file.repository, summary: "", folders: new Set(), fileCount: 0 };
+        map.set(file.repository, entry);
+      }
+      entry.fileCount += 1;
+      if (file.folder) entry.folders.add(file.folder);
+      if (file.metadata_level === "repository") {
+        entry.title = file.title || file.repository;
+        entry.summary = file.summary || "";
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [fileResults]);
+
+  const repoFiles = useMemo(
+    () => (browseRepo ? fileResults.filter((file) => file.repository === browseRepo) : []),
+    [fileResults, browseRepo]
+  );
+
+  const repoRootFiles = useMemo(() => repoFiles.filter((file) => !file.folder), [repoFiles]);
+
+  const folders = useMemo(() => {
+    const map = new Map<string, { name: string; title: string; summary: string; fileCount: number }>();
+    for (const file of repoFiles) {
+      if (!file.folder) continue;
+      let entry = map.get(file.folder);
+      if (!entry) {
+        entry = { name: file.folder, title: file.folder, summary: "", fileCount: 0 };
+        map.set(file.folder, entry);
+      }
+      entry.fileCount += 1;
+      if (file.metadata_level === "folder") {
+        entry.title = file.title || file.folder;
+        entry.summary = file.summary || "";
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => a.name.localeCompare(b.name));
+  }, [repoFiles]);
+
+  const folderFiles = useMemo(
+    () => (browseFolder ? repoFiles.filter((file) => file.folder === browseFolder) : []),
+    [repoFiles, browseFolder]
+  );
+
+  const currentRepo = useMemo(() => repositories.find((repo) => repo.name === browseRepo), [repositories, browseRepo]);
+  const currentFolder = useMemo(() => folders.find((folder) => folder.name === browseFolder), [folders, browseFolder]);
+
+  function renderFileRow(file: MarkdownFileSummary) {
+    return (
+      <button
+        className={`file-row ${selectedFile?.path === file.path ? "selected" : ""}`}
+        key={file.path}
+        type="button"
+        onClick={() => openMarkdownFile(file.path)}
+      >
+        <FileText size={16} className="browse-icon" />
+        <div>
+          <strong>{file.title}</strong>
+          <p>{file.path}</p>
+          <small>
+            {file.repository} · {file.folder || "repository"} · {file.metadata_level} · {file.citation.commit}
+          </small>
+        </div>
+        <ChevronRight size={16} />
+      </button>
+    );
+  }
 
   async function api<T>(path: string, init?: RequestInit): Promise<T> {
     const response = await fetch(`${API_BASE}${path}`, {
@@ -378,6 +454,9 @@ export default function Home() {
     setCalculation(null);
     setAnswer(null);
     setFileResults([]);
+    setSubmittedSearch("");
+    setBrowseRepo(null);
+    setBrowseFolder(null);
     setSelectedFile(null);
     refresh(userId).catch((caught) => setError(caught instanceof Error ? caught.message : String(caught)));
   }, [userId]);
@@ -395,6 +474,9 @@ export default function Home() {
     setCalculation(null);
     setAnswer(null);
     setFileResults([]);
+    setSubmittedSearch("");
+    setBrowseRepo(null);
+    setBrowseFolder(null);
     setSelectedFile(null);
     setProposal(null);
     setCommitResult(null);
@@ -452,6 +534,9 @@ export default function Home() {
     );
     if (result) {
       setFileResults(result.files);
+      setSubmittedSearch(nextQuery.trim());
+      setBrowseRepo(null);
+      setBrowseFolder(null);
       if (!result.files.some((file) => file.path === selectedFile?.path)) setSelectedFile(null);
     }
   }
@@ -754,7 +839,7 @@ export default function Home() {
         {tab === "query" && (
           <section className="view">
             <div className="command-row">
-              <input value={query} onChange={(event) => setQuery(event.target.value)} />
+              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ask a question..." />
               <button className="primary" type="button" onClick={askQuestion} title="Ask">
                 <MessageSquareText size={17} />
                 Ask
@@ -803,24 +888,105 @@ export default function Home() {
 
             <div className="files-browser">
               <div className="list file-list">
-                {fileResults.map((file) => (
-                  <button
-                    className={`file-row ${selectedFile?.path === file.path ? "selected" : ""}`}
-                    key={file.path}
-                    type="button"
-                    onClick={() => openMarkdownFile(file.path)}
-                  >
-                    <div>
-                      <strong>{file.title}</strong>
-                      <p>{file.path}</p>
-                      <small>
-                        {file.repository} · {file.folder || "repository"} · {file.metadata_level} · {file.citation.commit}
-                      </small>
+                {submittedSearch ? (
+                  fileResults.length ? (
+                    fileResults.map((file) => renderFileRow(file))
+                  ) : (
+                    <Empty icon={<FileText size={22} />} label="No files match your search" />
+                  )
+                ) : (
+                  <>
+                    <div className="browse-bar">
+                      <nav className="breadcrumb" aria-label="File location">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBrowseRepo(null);
+                            setBrowseFolder(null);
+                          }}
+                        >
+                          Repositories
+                        </button>
+                        {browseRepo && (
+                          <>
+                            <ChevronRight size={14} />
+                            <button type="button" onClick={() => setBrowseFolder(null)}>
+                              {currentRepo?.title ?? browseRepo}
+                            </button>
+                          </>
+                        )}
+                        {browseFolder && (
+                          <>
+                            <ChevronRight size={14} />
+                            <span>{currentFolder?.title ?? browseFolder}</span>
+                          </>
+                        )}
+                      </nav>
                     </div>
-                    <ChevronRight size={16} />
-                  </button>
-                ))}
-                {!fileResults.length && <Empty icon={<FileText size={22} />} label="No files loaded" />}
+
+                    {!browseRepo &&
+                      (repositories.length ? (
+                        repositories.map((repo) => (
+                          <button
+                            className="browse-row"
+                            key={repo.name}
+                            type="button"
+                            onClick={() => {
+                              setBrowseRepo(repo.name);
+                              setBrowseFolder(null);
+                            }}
+                          >
+                            <Database size={18} className="browse-icon" />
+                            <div>
+                              <strong>{repo.title}</strong>
+                              {repo.summary && <p>{repo.summary}</p>}
+                              <small>
+                                {repo.name} · {repo.folders.size} folder{repo.folders.size === 1 ? "" : "s"}
+                              </small>
+                            </div>
+                            <ChevronRight size={16} />
+                          </button>
+                        ))
+                      ) : (
+                        <Empty icon={<Database size={22} />} label="No repositories available" />
+                      ))}
+
+                    {browseRepo && !browseFolder && (
+                      <>
+                        {folders.map((folder) => (
+                          <button
+                            className="browse-row"
+                            key={folder.name}
+                            type="button"
+                            onClick={() => setBrowseFolder(folder.name)}
+                          >
+                            <Folder size={18} className="browse-icon" />
+                            <div>
+                              <strong>{folder.title}</strong>
+                              {folder.summary && <p>{folder.summary}</p>}
+                              <small>
+                                {folder.name} · {folder.fileCount} file{folder.fileCount === 1 ? "" : "s"}
+                              </small>
+                            </div>
+                            <ChevronRight size={16} />
+                          </button>
+                        ))}
+                        {repoRootFiles.map((file) => renderFileRow(file))}
+                        {!folders.length && !repoRootFiles.length && (
+                          <Empty icon={<FileText size={22} />} label="This repository is empty" />
+                        )}
+                      </>
+                    )}
+
+                    {browseRepo && browseFolder && (
+                      folderFiles.length ? (
+                        folderFiles.map((file) => renderFileRow(file))
+                      ) : (
+                        <Empty icon={<FileText size={22} />} label="This folder is empty" />
+                      )
+                    )}
+                  </>
+                )}
               </div>
 
               <div className="markdown-reader">
@@ -857,7 +1023,7 @@ export default function Home() {
                   <option value="data-governance">data-governance</option>
                 </select>
               </label>
-              <textarea value={authorText} onChange={(event) => setAuthorText(event.target.value)} />
+              <textarea value={authorText} onChange={(event) => setAuthorText(event.target.value)} placeholder="Draft an update..." />
               <button className="primary" type="button" onClick={draftProposal} title="Draft proposal">
                 <SquarePen size={17} />
                 Draft

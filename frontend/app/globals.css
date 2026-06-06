@@ -142,6 +142,11 @@ textarea:focus {
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.14);
 }
 
+input::placeholder,
+textarea::placeholder {
+  color: #9aa7b4;
+}
+
 .identity {
   display: flex;
   align-items: center;
@@ -732,9 +737,98 @@ th {
   background: #eef4ff;
 }
 
+.file-row:hover {
+  background: #f5f8ff;
+}
+
 .file-row > div {
   min-width: 0;
   flex: 1;
+}
+
+.browse-bar {
+  display: flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 0 13px;
+  border-bottom: 1px solid var(--line);
+}
+
+.breadcrumb {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.breadcrumb button {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--blue);
+  font-weight: 700;
+}
+
+.breadcrumb button:hover {
+  text-decoration: underline;
+}
+
+.breadcrumb span {
+  color: var(--ink);
+  font-weight: 700;
+}
+
+.breadcrumb svg {
+  color: var(--muted);
+}
+
+.browse-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 12px;
+  padding: 13px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.browse-row:last-child {
+  border-bottom: 0;
+}
+
+.browse-row:hover {
+  background: #f5f8ff;
+}
+
+.browse-row > div {
+  min-width: 0;
+  flex: 1;
+}
+
+.browse-row strong {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browse-row p {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.browse-icon {
+  flex: 0 0 auto;
+  color: var(--blue);
 }
 
 .file-row strong,
