@@ -586,6 +586,60 @@ summary {
   color: var(--muted);
 }
 
+.conflict-files {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+.conflict-file {
+  display: grid;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--orange);
+  border-radius: 8px;
+  background: rgba(249, 115, 22, 0.06);
+}
+
+.conflict-file-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--orange);
+}
+
+.conflict-file-head strong {
+  font-size: 13px;
+}
+
+.conflict-file-path {
+  font-size: 12px;
+  color: var(--muted);
+  word-break: break-all;
+}
+
+.conflict-file-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--orange);
+}
+
+.conflict-file-markdown {
+  max-height: 320px;
+  overflow: auto;
+  margin: 0;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #0f172a;
+  color: #dbeafe;
+  font-size: 12px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .markdown-preview,
 .json-preview {
   max-height: 360px;

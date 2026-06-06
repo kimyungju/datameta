@@ -8,3 +8,10 @@ __pycache__/
 .env
 .env.local
 .venv
+
+# Runtime / build artifacts
+*.log
+frontend/tsconfig.tsbuildinfo
+
+# Scratch / temporary working files
+_tmp_*

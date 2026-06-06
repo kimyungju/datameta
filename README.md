@@ -30,13 +30,7 @@ npm run dev
 
 Then open `http://localhost:3000`.
 
-Neo4j, once Docker Desktop is running:
-
-```bash
-docker compose up -d neo4j
-```
-
-The MVP includes `backend/neo4j/schema.cypher` for the planned vector, full-text, and graph indexes. The running localhost demo uses the same document/entity boundaries with a deterministic local retriever when Neo4j is not connected.
+Neo4j runs on Neo4j Aura (cloud). The MVP includes `backend/neo4j/schema.cypher` for the vector, full-text, and graph indexes; load it once against the Aura database before the first sync. The running localhost demo uses the same document/entity boundaries with a deterministic local retriever when Neo4j is not connected.
 
 Reset seeded demo state:
 
@@ -57,11 +51,19 @@ DataMeta uses the OpenAI Responses API to convert authoring comments into markdo
 
 Optional Neo4j sync for committed knowledge:
 
+Sync uses the official Neo4j Bolt driver (`neo4j` Python package), so the URL is a
+Bolt URI pointing at Neo4j Aura.
+
 ```bash
-export DATAMETA_NEO4J_URL="http://127.0.0.1:7474"
-export DATAMETA_NEO4J_USER="..."
+# Neo4j Aura (note: Aura names the user and default database after the instance id):
+export DATAMETA_NEO4J_URL="neo4j+s://<instance-id>.databases.neo4j.io"
+export DATAMETA_NEO4J_USER="<instance-id>"          # often the instance id, not "neo4j"
 export DATAMETA_NEO4J_PASSWORD="..."
+export DATAMETA_NEO4J_DATABASE="<instance-id>"      # defaults to "neo4j" if unset
 ```
+
+On localhost the backend reads these from `backend/.env` (gitignored). Load the index
+definitions once with `backend/neo4j/schema.cypher` before the first sync.
 
 When these are set, committed markdown documents are upserted into Neo4j with document, team, entity, search-term, and model-produced relationship metadata. The local markdown repository remains the source of truth for validation and fallback search.
 
