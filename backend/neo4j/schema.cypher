@@ -83,3 +83,13 @@ OPTIONS {
     `vector.similarity_function`: 'cosine'
   }
 };
+
+// Vector dimension constraint (metadata-only embeddings):
+// Repository, Folder, and Document nodes carry an `embedding` computed from their metadata_text.
+// Chunks are NOT embedded (there is no datameta_chunk_embedding vector index); chunk retrieval
+// uses datameta_chunk_fulltext for keyword search.
+// All datameta_*_embedding vector indexes are fixed at 3072 dimensions to match the production
+// embedding model (OpenAI text-embedding-3-large). To use a different model, recreate these indexes
+// with the matching dimension and set DATAMETA_NEO4J_VECTOR_DIMENSIONS so sync writes only
+// matching-dimension vectors. The 256-dim local hash fallback (tests/dev) is NOT written to these
+// indexes unless DATAMETA_NEO4J_VECTOR_DIMENSIONS is overridden to 256.
