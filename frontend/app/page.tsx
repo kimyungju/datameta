@@ -77,7 +77,12 @@ type CalculationResult = {
 type Bootstrap = {
   project: string;
   company: string;
-  models: { reasoning: string; embedding: string };
+  models: {
+    mode: string;
+    api_key_configured: boolean;
+    reasoning?: string | null;
+    embedding?: string | null;
+  };
   user: User;
   users: User[];
   schema: { table: string; columns: string[] }[];
@@ -143,7 +148,7 @@ type ProposalResult = {
   proposal: Record<string, unknown>;
   markdown: string;
   validation: ValidationResult;
-  model: string;
+  model?: string | null;
 };
 
 type ValidationResult = {
@@ -181,6 +186,14 @@ function dateLabel(value?: string) {
     hour: "2-digit",
     minute: "2-digit"
   }).format(new Date(value));
+}
+
+function modelStatus(models?: Bootstrap["models"]) {
+  if (!models) return "Local deterministic";
+  const configuredModels = [models.reasoning, models.embedding].filter(Boolean).join(" · ");
+  if (models.mode === "openai_missing_model") return "OpenAI key configured · model missing";
+  const mode = models.api_key_configured ? "OpenAI configured" : "Local deterministic";
+  return configuredModels ? `${configuredModels} · ${mode}` : mode;
 }
 
 export default function Home() {
@@ -427,7 +440,7 @@ export default function Home() {
           </div>
 
           <div className="login-copy">
-            <p className="eyebrow">{bootstrap?.models.reasoning ?? "gpt-5.5"} · RBAC demo</p>
+            <p className="eyebrow">{modelStatus(bootstrap?.models)} · RBAC demo</p>
             <h2>Choose your user</h2>
           </div>
 
@@ -513,7 +526,7 @@ export default function Home() {
       <section className="workspace">
         <header className="topbar">
           <div>
-            <p className="eyebrow">{bootstrap?.models.reasoning ?? "gpt-5.5"} · {bootstrap?.models.embedding ?? "text-embedding-3-large"}</p>
+            <p className="eyebrow">{modelStatus(bootstrap?.models)}</p>
             <h2>{titleForTab(tab)}</h2>
           </div>
           <div className="status-line">

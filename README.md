@@ -44,6 +44,27 @@ Reset seeded demo state:
 python3 backend/scripts/reset_demo.py
 ```
 
+OpenAI authoring configuration:
+
+```bash
+export OPENAI_API_KEY="..."
+export DATAMETA_REASONING_MODEL="..."
+# Optional alias: OPENAI_MODEL="..."
+# Optional embedding metadata: DATAMETA_EMBEDDING_MODEL="..."
+```
+
+DataMeta uses the OpenAI Responses API to convert authoring comments into markdown front matter, body markdown, search terms, and Neo4j graph metadata. If `OPENAI_API_KEY` is set without `DATAMETA_REASONING_MODEL` or `OPENAI_MODEL`, authoring is blocked with a configuration error instead of silently using local heuristics. If no OpenAI key is set, the demo reports `local_deterministic` mode and uses the local fallback.
+
+Optional Neo4j sync for committed knowledge:
+
+```bash
+export DATAMETA_NEO4J_URL="http://127.0.0.1:7474"
+export DATAMETA_NEO4J_USER="..."
+export DATAMETA_NEO4J_PASSWORD="..."
+```
+
+When these are set, committed markdown documents are upserted into Neo4j with document, team, entity, search-term, and model-produced relationship metadata. The local markdown repository remains the source of truth for validation and fallback search.
+
 Codex MCP configuration target:
 
 ```toml
