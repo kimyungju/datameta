@@ -450,16 +450,32 @@ button:disabled {
   background: var(--green);
 }
 
-.team-dot.ops {
+.team-dot.sales {
   background: var(--orange);
 }
 
-.team-dot.analytics {
-  background: var(--pink);
+.team-dot.legal-contracts {
+  background: var(--violet);
 }
 
-.team-dot.data-ownership {
-  background: var(--violet);
+.team-dot.customer-success-ops {
+  background: var(--green);
+}
+
+.team-dot.platform-operations {
+  background: var(--blue);
+}
+
+.team-dot.vendor-risk-management {
+  background: var(--orange);
+}
+
+.team-dot.security-incident-response {
+  background: var(--red);
+}
+
+.team-dot.data-governance {
+  background: var(--pink);
 }
 
 .runner-row {
@@ -516,6 +532,10 @@ code {
   display: grid;
   gap: 14px;
   padding: 18px;
+}
+
+.answer-text {
+  white-space: pre-wrap;
 }
 
 .citations {

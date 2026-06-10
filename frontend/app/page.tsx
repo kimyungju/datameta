@@ -2,7 +2,6 @@
 
 import {
   AlertTriangle,
-  BarChart3,
   BookOpenText,
   Check,
   ChevronRight,
@@ -16,12 +15,10 @@ import {
   LogIn,
   Loader2,
   MessageSquareText,
-  Play,
   RefreshCw,
   Search,
   ShieldCheck,
   SlidersHorizontal,
-  Sparkles,
   SquarePen
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -187,7 +184,7 @@ type ValidationResult = {
 
 type ApiError = { detail?: string };
 
-type Tab = "calculate" | "query" | "files" | "author" | "pipeline" | "outliers" | "history";
+type Tab = "query" | "files" | "author" | "history";
 
 type ShortlistItem = {
   id: string;
@@ -312,7 +309,6 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
 
-  const [calcQuestion, setCalcQuestion] = useState("How to calculate ARR?");
   const [prepare, setPrepare] = useState<PrepareResult | null>(null);
   const [selectedDefinition, setSelectedDefinition] = useState("");
   const [selectedTable, setSelectedTable] = useState("");
@@ -329,18 +325,17 @@ export default function Home() {
   const [selectedFile, setSelectedFile] = useState<MarkdownFileDetail | null>(null);
 
   const [authorText, setAuthorText] = useState("");
-  const [targetTeam, setTargetTeam] = useState("legal-contracts");
+  const [targetTeam, setTargetTeam] = useState("");
   const [proposal, setProposal] = useState<ProposalResult | null>(null);
   const [commitResult, setCommitResult] = useState<Record<string, unknown> | null>(null);
 
-  const [pipeline, setPipeline] = useState<PipelineOutput | null>(null);
-  const [flagSubject, setFlagSubject] = useState("Vendor X recovery evidence gap");
-  const [flagDescription, setFlagDescription] = useState("Vendor X has not yet provided the final RCA needed for Customer A evidence retention.");
-  const [flagResult, setFlagResult] = useState<Record<string, unknown> | null>(null);
-  const [resolutionText, setResolutionText] = useState("The marketplace feed duplicated a single order. Exclude ord_005 until the data fix lands.");
-
   const activeUser = useMemo(() => bootstrap?.users.find((user) => user.id === userId), [bootstrap, userId]);
   const loginUser = useMemo(() => bootstrap?.users.find((user) => user.id === loginUserId), [bootstrap, loginUserId]);
+  const writableTeams = useMemo(() => activeUser?.write_teams ?? [], [activeUser]);
+
+  useEffect(() => {
+    if (!writableTeams.includes(targetTeam)) setTargetTeam(writableTeams[0] ?? "");
+  }, [writableTeams, targetTeam]);
 
   const repositories = useMemo(() => {
     const map = new Map<string, { name: string; title: string; summary: string; folders: Set<string>; fileCount: number }>();
@@ -492,42 +487,11 @@ export default function Home() {
     setSelectedFile(null);
     setProposal(null);
     setCommitResult(null);
-    setPipeline(null);
-    setFlagResult(null);
     setNotice("");
   }
 
-  async function prepareCalculation() {
-    const result = await runAction(
-      () =>
-        api<PrepareResult>("/api/calculation/prepare", {
-          method: "POST",
-          body: JSON.stringify({ question: calcQuestion })
-        }),
-      "Definitions loaded"
-    );
-    if (result) {
-      setPrepare(result);
-      const first = result.definitions[0];
-      setSelectedDefinition(first?.id ?? "");
-      setSelectedTable(first?.accessible_tables[0]?.table ?? "");
-      setCalculation(null);
-    }
-  }
-
-  async function runCalculation() {
-    const result = await runAction(
-      () =>
-        api<CalculationResult>("/api/calculation/run", {
-          method: "POST",
-          body: JSON.stringify({ definition_id: selectedDefinition, table: selectedTable })
-        }),
-      "Calculation complete"
-    );
-    if (result) setCalculation(result);
-  }
-
   async function askQuestion() {
+    if (!query.trim() || loading) return;
     const result = await runAction(() =>
       api<Record<string, unknown>>("/api/ask", {
         method: "POST",
@@ -626,59 +590,6 @@ export default function Home() {
     }
   }
 
-  async function runPipeline() {
-    const result = await runAction(
-      () =>
-        api<{ output: PipelineOutput }>("/api/pipeline/run", {
-          method: "POST",
-          body: JSON.stringify({ runbook_id: "gmv-category-ranker" })
-        }),
-      "Pipeline run saved"
-    );
-    if (result) {
-      setPipeline(result.output);
-      refresh().catch(() => undefined);
-    }
-  }
-
-  async function flagOutlier() {
-    const result = await runAction(
-      () =>
-        api<Record<string, unknown>>("/api/outliers/flag", {
-          method: "POST",
-          body: JSON.stringify({
-            table_name: "orders",
-            subject: flagSubject,
-            description: flagDescription,
-            owner_team: "data-ownership"
-          })
-        }),
-      "Flag sent to data ownership"
-    );
-    if (result) {
-      setFlagResult(result);
-      refresh().catch(() => undefined);
-    }
-  }
-
-  async function resolveFlag(flagId: string) {
-    const result = await runAction(
-      () =>
-        api<Record<string, unknown>>("/api/outliers/resolve", {
-          method: "POST",
-          body: JSON.stringify({ flag_id: flagId, resolution: resolutionText })
-        }),
-      "Flag resolved and committed"
-    );
-    if (result) {
-      setFlagResult(result);
-      refresh().catch(() => undefined);
-    }
-  }
-
-  const currentDefinition = prepare?.definitions.find((definition) => definition.id === selectedDefinition);
-  const tableOptions = currentDefinition?.accessible_tables ?? [];
-  const maxChart = pipeline?.chart.reduce((max, item) => Math.max(max, item.value), 0) ?? 1;
 
   if (!userId) {
     return (
@@ -795,96 +706,18 @@ export default function Home() {
           </div>
         </header>
 
-        {tab === "calculate" && (
-          <section className="view">
-            <div className="command-row">
-              <input value={calcQuestion} onChange={(event) => setCalcQuestion(event.target.value)} />
-              <button className="primary" type="button" onClick={prepareCalculation} title="Find definitions">
-                <Search size={17} />
-                Find
-              </button>
-            </div>
-
-            {prepare && (
-              <>
-                <div className="message-band">
-                  <Sparkles size={18} />
-                  <span>{prepare.message}</span>
-                </div>
-                <div className="definition-grid">
-                  {prepare.definitions.map((definition) => (
-                    <button
-                      className={`definition-tile ${selectedDefinition === definition.id ? "selected" : ""}`}
-                      key={definition.id}
-                      type="button"
-                      onClick={() => {
-                        setSelectedDefinition(definition.id);
-                        setSelectedTable(definition.accessible_tables[0]?.table ?? "");
-                      }}
-                    >
-                      <div className="tile-head">
-                        <span className={`team-dot ${definition.team}`} />
-                        <strong>{definition.title}</strong>
-                      </div>
-                      <p>{definition.summary}</p>
-                      <ul>
-                        {definition.entails.map((item) => (
-                          <li key={item}>{item}</li>
-                        ))}
-                      </ul>
-                      <small>
-                        {definition.citation.path} · {definition.citation.commit}
-                      </small>
-                    </button>
-                  ))}
-                </div>
-
-                <div className="runner-row">
-                  <label>
-                    Definition
-                    <select value={selectedDefinition} onChange={(event) => setSelectedDefinition(event.target.value)}>
-                      {prepare.definitions.map((definition) => (
-                        <option key={definition.id} value={definition.id}>
-                          {definition.team} · {definition.scope}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Accessible table
-                    <select value={selectedTable} onChange={(event) => setSelectedTable(event.target.value)}>
-                      {tableOptions.map((table) => (
-                        <option key={table.table} value={table.table}>
-                          {table.table}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <button className="primary" type="button" onClick={runCalculation} disabled={!selectedDefinition || !selectedTable} title="Run calculation">
-                    <Play size={17} />
-                    Run
-                  </button>
-                </div>
-              </>
-            )}
-
-            {calculation && (
-              <div className="result-band">
-                <div>
-                  <p className="eyebrow">{calculation.definition?.team} · {calculation.table}</p>
-                  <h3>{money(calculation.result?.value)}</h3>
-                </div>
-                <code>{calculation.sql}</code>
-              </div>
-            )}
-          </section>
-        )}
-
         {tab === "query" && (
           <section className="view">
             <div className="command-row">
-              <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Ask a question..." />
-              <button className="primary" type="button" onClick={askQuestion} title="Ask">
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") askQuestion().catch(() => undefined);
+                }}
+                placeholder="Ask a question..."
+              />
+              <button className="primary" type="button" onClick={askQuestion} disabled={loading || !query.trim()} title="Ask">
                 <MessageSquareText size={17} />
                 Ask
               </button>
@@ -944,7 +777,7 @@ export default function Home() {
                   {answer.answerable ? <Check size={18} /> : <AlertTriangle size={18} />}
                   <span>{answer.answerable ? "Answerable from selected markdown" : "Not answerable from available knowledge"}</span>
                 </div>
-                <p>{answer.answer}</p>
+                <p className="answer-text">{answer.answer}</p>
                 <TraceSections result={answer} />
                 <CitationList citations={answer.citations ?? []} />
                 {Boolean(answer.trace) && (
@@ -1101,22 +934,36 @@ export default function Home() {
         {tab === "author" && (
           <section className="view split">
             <div className="edit-pane">
-              <label>
-                Team
-                <select value={targetTeam} onChange={(event) => setTargetTeam(event.target.value)}>
-                  <option value="legal-contracts">legal-contracts</option>
-                  <option value="customer-success-ops">customer-success-ops</option>
-                  <option value="platform-operations">platform-operations</option>
-                  <option value="vendor-risk-management">vendor-risk-management</option>
-                  <option value="security-incident-response">security-incident-response</option>
-                  <option value="data-governance">data-governance</option>
-                </select>
-              </label>
-              <textarea value={authorText} onChange={(event) => setAuthorText(event.target.value)} placeholder="Draft an update..." />
-              <button className="primary" type="button" onClick={draftProposal} title="Draft proposal">
-                <SquarePen size={17} />
-                Draft
-              </button>
+              {writableTeams.length ? (
+                <>
+                  <label>
+                    Team
+                    <select value={targetTeam} onChange={(event) => setTargetTeam(event.target.value)}>
+                      {writableTeams.map((team) => (
+                        <option key={team} value={team}>
+                          {team}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <textarea value={authorText} onChange={(event) => setAuthorText(event.target.value)} placeholder="Draft an update..." />
+                  <button
+                    className="primary"
+                    type="button"
+                    onClick={draftProposal}
+                    disabled={loading || !authorText.trim() || !targetTeam}
+                    title="Draft proposal"
+                  >
+                    <SquarePen size={17} />
+                    Draft
+                  </button>
+                </>
+              ) : (
+                <Empty
+                  icon={<ShieldCheck size={22} />}
+                  label={`${activeUser?.name ?? "This user"} has no write access to any team repository`}
+                />
+              )}
             </div>
             <div className="output-pane">
               {proposal ? (
@@ -1167,76 +1014,6 @@ export default function Home() {
               ) : (
                 <Empty icon={<BookOpenText size={22} />} label="No proposal" />
               )}
-            </div>
-          </section>
-        )}
-
-        {tab === "pipeline" && (
-          <section className="view">
-            <div className="toolbar">
-              <button className="primary" type="button" onClick={runPipeline} title="Run pipeline">
-                <Play size={17} />
-                Run Runbook
-              </button>
-              <span className="pill">incident evidence · demo output</span>
-            </div>
-            {pipeline && (
-              <>
-                <div className="bars">
-                  {pipeline.chart.map((item) => (
-                    <div className="bar-row" key={item.label}>
-                      <span>{item.label}</span>
-                      <div className="bar-track">
-                        <div className="bar-fill" style={{ width: `${Math.max(4, (item.value / maxChart) * 100)}%`, background: item.color }} />
-                      </div>
-                      <strong>{money(item.value)}</strong>
-                    </div>
-                  ))}
-                </div>
-                <DataTable rows={pipeline.table} />
-                <code className="sql-line">{pipeline.sql}</code>
-              </>
-            )}
-          </section>
-        )}
-
-        {tab === "outliers" && (
-          <section className="view split">
-            <div className="edit-pane">
-              <label>
-                Subject
-                <input value={flagSubject} onChange={(event) => setFlagSubject(event.target.value)} />
-              </label>
-              <label>
-                Description
-                <textarea value={flagDescription} onChange={(event) => setFlagDescription(event.target.value)} />
-              </label>
-              <button className="primary" type="button" onClick={flagOutlier} title="Flag outlier">
-                <AlertTriangle size={17} />
-                Flag
-              </button>
-              <label>
-                Resolution
-                <textarea value={resolutionText} onChange={(event) => setResolutionText(event.target.value)} />
-              </label>
-            </div>
-            <div className="output-pane">
-              {(bootstrap?.history.flags ?? []).map((flag) => (
-                <div className="flag-row" key={flag.id}>
-                  <div>
-                    <strong>{flag.subject}</strong>
-                    <p>{flag.description}</p>
-                    <small>{flag.status} · {flag.owner_team} · {dateLabel(flag.created_at)}</small>
-                  </div>
-                  {flag.status !== "resolved" && (
-                    <button className="secondary compact" type="button" onClick={() => resolveFlag(flag.id)} title="Resolve">
-                      <Check size={16} />
-                      Resolve
-                    </button>
-                  )}
-                </div>
-              ))}
-              {flagResult && <pre className="json-preview">{JSON.stringify(flagResult, null, 2)}</pre>}
             </div>
           </section>
         )}
@@ -1301,12 +1078,9 @@ function TabButton({ active, icon, label, onClick }: { active: boolean; icon: Re
 
 function titleForTab(tab: Tab) {
   const titles: Record<Tab, string> = {
-    calculate: "Legacy Calculation",
     query: "Query",
     files: "Files",
     author: "Knowledge Authoring",
-    pipeline: "Runbook Runner",
-    outliers: "Outlier Review",
     history: "Git History"
   };
   return titles[tab];
@@ -1376,29 +1150,6 @@ function CitationList({ citations }: { citations: Citation[] }) {
         </span>
       ))}
     </div>
-  );
-}
-
-function DataTable({ rows }: { rows: Array<{ category: string; net_gmv: number; order_count: number }> }) {
-  return (
-    <table>
-      <thead>
-        <tr>
-          <th>Category</th>
-          <th>Value</th>
-          <th>Orders</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row) => (
-          <tr key={row.category}>
-            <td>{row.category}</td>
-            <td>{money(row.net_gmv)}</td>
-            <td>{row.order_count}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   );
 }
 

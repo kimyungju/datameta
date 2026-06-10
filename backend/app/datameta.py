@@ -3519,14 +3519,15 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             table_words = table.replace("_", " ")
             if table in normalized or table_words in normalized:
                 return table
-        if {"order", "orders", "gmv", "refund", "marketplace"} & tokenize(text) and user.can_access_table("orders"):
-            return "orders"
-        if {"metric", "metrics", "daily"} & tokenize(text) and user.can_access_table("ops_daily_metrics"):
-            return "ops_daily_metrics"
-        if {"renewal", "renewals"} & tokenize(text) and user.can_access_table("renewals"):
-            return "renewals"
-        if {"subscription", "subscriptions", "mrr"} & tokenize(text) and user.can_access_table("subscriptions"):
-            return "subscriptions"
+        tokens = tokenize(text)
+        if {"availability", "sla", "slo", "uptime"} & tokens and user.can_access_table("sla_availability"):
+            return "sla_availability"
+        if {"vendor", "rca"} & tokens and user.can_access_table("vendor_events"):
+            return "vendor_events"
+        if {"incident", "outage", "timeline", "event", "events"} & tokens and user.can_access_table("incident_events"):
+            return "incident_events"
+        if {"arr", "mrr", "acv", "subscription", "subscriptions", "revenue"} & tokens and user.can_access_table("arr_subscriptions"):
+            return "arr_subscriptions"
         return None
 
     def _infer_outlier_subject(self, text: str, table_name: str | None) -> str:
