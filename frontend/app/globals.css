@@ -772,6 +772,17 @@ th {
   font-style: italic;
 }
 
+.resolve-form {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.resolve-form input {
+  flex: 1;
+  min-width: 0;
+}
+
 .history-grid > div {
   display: grid;
   gap: 12px;

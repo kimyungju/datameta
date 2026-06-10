@@ -3461,7 +3461,7 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
         prepared = self.prepare_calculation(question, user_id)
         if prepared["definitions"]:
             if prepared["requires_choice"]:
-                return {"intent": "choose_definition", "action": "datameta_choose_definition", **prepared}
+                return {"intent": "choose_definition", "action": "datameta_run_calculation", **prepared}
             definition = prepared["definitions"][0]
             table = definition["accessible_tables"][0]["table"] if definition["accessible_tables"] else None
             if table:
@@ -3472,7 +3472,7 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
                     "prepare": prepared,
                     "calculation": calculation,
                 }
-            return {"intent": "choose_definition", "action": "datameta_choose_definition", **prepared}
+            return {"intent": "choose_definition", "action": "datameta_run_calculation", **prepared}
         answer = self.answer(user_id, question, include_trace)
         return {"intent": "answer", "action": "datameta_answer", **answer}
 
@@ -3650,61 +3650,6 @@ Resolution:
             rows = db.execute("SELECT * FROM outlier_flags ORDER BY created_at DESC").fetchall()
         return [dict(row) for row in rows]
 
-    def run_pipeline(self, user_id: str | None, runbook_id: str = "gmv-category-ranker", variant: str | None = None) -> dict[str, Any]:
-        user = self.get_user(user_id)
-        doc = self.get_document_by_id(user, runbook_id)
-        if not doc or doc["type"] != "runbook":
-            raise PermissionError(f"Runbook {runbook_id} is not visible to {user.name}")
-        if not user.can_access_table("orders"):
-            raise PermissionError(f"{user.name} cannot access orders")
-        sql = """
-            SELECT
-                category,
-                ROUND(SUM(gross_merchandise_value - refund_amount), 2) AS net_gmv,
-                COUNT(*) AS order_count
-            FROM orders
-            GROUP BY category
-            ORDER BY net_gmv DESC
-            LIMIT 5
-        """
-        with self._connect_warehouse() as db:
-            rows = [dict(row) for row in db.execute(sql)]
-        colors = parse_csv(doc["metadata"].get("chart_colors"))
-        chart = [
-            {
-                "label": row["category"],
-                "value": row["net_gmv"],
-                "color": colors[index % len(colors)] if colors else "#2563eb",
-            }
-            for index, row in enumerate(rows)
-        ]
-        output = {
-            "runbook": self._doc_option(doc),
-            "variant": variant or "weekly_ops_review",
-            "sql": re.sub(r"\s+", " ", sql).strip(),
-            "table": rows,
-            "chart": chart,
-            "citation": self._citation(doc),
-        }
-        run_id = f"run_{datetime.now(UTC).strftime('%Y%m%d%H%M%S%f')}"
-        with self._connect_app() as db:
-            db.execute(
-                "INSERT INTO pipeline_runs VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, utc_now(), user.id, runbook_id, variant, json.dumps(output, sort_keys=True)),
-            )
-        return {"ok": True, "run_id": run_id, "output": output}
-
-    def list_pipeline_runs(self) -> list[dict[str, Any]]:
-        self.ensure_ready()
-        with self._connect_app() as db:
-            rows = db.execute("SELECT * FROM pipeline_runs ORDER BY created_at DESC").fetchall()
-        runs = []
-        for row in rows:
-            item = dict(row)
-            item["output"] = json.loads(item.pop("output_json"))
-            runs.append(item)
-        return runs
-
     def history(self, path: str | None = None, user_id: str | None = None) -> dict[str, Any]:
         self.ensure_ready()
         user = self.get_user(user_id)
@@ -3749,7 +3694,6 @@ Resolution:
                 for doc in self.visible_documents(user)
             ],
             "flags": self.list_flags(),
-            "pipeline_runs": self.list_pipeline_runs(),
         }
 
     def _markdown_search_payload(

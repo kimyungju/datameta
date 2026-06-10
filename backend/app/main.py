@@ -111,12 +111,6 @@ class ResolveOutlierRequest(BaseModel):
     resolution: str
 
 
-class PipelineRunRequest(BaseModel):
-    user_id: str | None = None
-    runbook_id: str = "gmv-category-ranker"
-    variant: str | None = None
-
-
 def user_from_header(header_user: str | None, body_user: str | None = None) -> str | None:
     return body_user or header_user
 
@@ -267,14 +261,6 @@ def flag_outlier(request: FlagOutlierRequest, x_user_id: str | None = Header(def
 def resolve_flag(request: ResolveOutlierRequest, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
     try:
         return service.resolve_flag(user_from_header(x_user_id, request.user_id), request.flag_id, request.resolution)
-    except Exception as error:
-        raise handle_error(error)
-
-
-@app.post("/api/pipeline/run")
-def run_pipeline(request: PipelineRunRequest, x_user_id: str | None = Header(default=None)) -> dict[str, Any]:
-    try:
-        return service.run_pipeline(user_from_header(x_user_id, request.user_id), request.runbook_id, request.variant)
     except Exception as error:
         raise handle_error(error)
 
@@ -443,6 +429,72 @@ def mcp_tools() -> list[dict[str, Any]]:
             "annotations": {"readOnlyHint": False, "destructiveHint": True, "idempotentHint": False, "openWorldHint": False},
         },
         {
+            "name": "datameta_prepare_calculation",
+            "title": "Prepare DataMeta Calculation",
+            "description": (
+                "Find metric definitions visible to the user for a calculation question. "
+                "When more than one team's definition applies, the result pauses with requires_choice=true "
+                "instead of guessing; pick one and call datameta_run_calculation."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {"question": {"type": "string"}, "user_id": user_property},
+                "required": ["question"],
+            },
+            "annotations": {"readOnlyHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "datameta_run_calculation",
+            "title": "Run DataMeta Calculation",
+            "description": (
+                "Run one team's metric definition against an accessible warehouse table and return the value "
+                "plus the exact SQL. Use after datameta_ask or datameta_prepare_calculation pauses with "
+                "multiple definitions; pass the chosen definition_id and one of its accessible tables."
+            ),
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "definition_id": {"type": "string"},
+                    "table": {"type": "string"},
+                    "user_id": user_property,
+                },
+                "required": ["definition_id", "table"],
+            },
+            "annotations": {"readOnlyHint": True, "openWorldHint": False},
+        },
+        {
+            "name": "datameta_flag_outlier",
+            "title": "Flag DataMeta Outlier",
+            "description": "Flag a suspicious data point on a warehouse table for owner-team review.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "table_name": {"type": "string"},
+                    "subject": {"type": "string"},
+                    "description": {"type": "string"},
+                    "owner_team": {"type": "string"},
+                    "user_id": user_property,
+                },
+                "required": ["table_name", "subject", "description"],
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
+        },
+        {
+            "name": "datameta_resolve_flag",
+            "title": "Resolve DataMeta Flag",
+            "description": "Resolve an open data-quality flag with a resolution note.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "flag_id": {"type": "string"},
+                    "resolution": {"type": "string"},
+                    "user_id": user_property,
+                },
+                "required": ["flag_id", "resolution"],
+            },
+            "annotations": {"readOnlyHint": False, "destructiveHint": False, "openWorldHint": False},
+        },
+        {
             "name": "datameta_history",
             "title": "Show DataMeta History",
             "description": "Show Git commits, seeded documents, flags, and proposal history.",
@@ -503,8 +555,6 @@ def dispatch_tool(name: str, arguments: dict[str, Any]) -> Any:
         )
     if name == "datameta_resolve_flag":
         return service.resolve_flag(arguments.get("user_id"), arguments["flag_id"], arguments["resolution"])
-    if name == "datameta_run_pipeline":
-        return service.run_pipeline(arguments.get("user_id"), arguments.get("runbook_id", "gmv-category-ranker"), arguments.get("variant"))
     if name == "datameta_history":
         return service.history(arguments.get("path"), arguments.get("user_id"))
     raise ValueError(f"Unknown DataMeta tool: {name}")
@@ -529,7 +579,9 @@ async def mcp(request: Request) -> dict[str, Any] | Response:
                 "instructions": (
                     "Use DataMeta for Generic Enterprise incident-response knowledge across repositories, folders, and markdown files. "
                     "For incident questions, call datameta_multirepo_query to route repository to folder to file and cite returned paths and commit hashes. "
-                    "If DataMeta returns not answerable, do not infer missing facts."
+                    "For metric questions (e.g. ARR), call datameta_ask first: when teams define the metric differently it pauses with "
+                    "requires_choice=true and the visible definitions; ask the user to choose, then call datameta_run_calculation with the "
+                    "chosen definition_id and table. If DataMeta returns not answerable, do not infer missing facts."
                 ),
             }
         elif method == "tools/list":

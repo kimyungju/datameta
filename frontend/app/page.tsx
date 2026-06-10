@@ -115,7 +115,6 @@ type HistoryPayload = {
     paths: string[];
   }>;
   flags: OutlierFlag[];
-  pipeline_runs: PipelineRun[];
 };
 
 type OutlierFlag = {
@@ -130,22 +129,6 @@ type OutlierFlag = {
   resolved_at?: string;
   resolved_by?: string;
   resolution?: string;
-};
-
-type PipelineRun = {
-  id: string;
-  created_at: string;
-  created_by: string;
-  runbook_id: string;
-  output: PipelineOutput;
-};
-
-type PipelineOutput = {
-  table: Array<{ category: string; net_gmv: number; order_count: number }>;
-  chart: Array<{ label: string; value: number; color: string }>;
-  sql: string;
-  citation: Citation;
-  runbook: { title: string; team: string; scope: string };
 };
 
 type ProposalResult = {
@@ -328,6 +311,9 @@ export default function Home() {
   const [targetTeam, setTargetTeam] = useState("");
   const [proposal, setProposal] = useState<ProposalResult | null>(null);
   const [commitResult, setCommitResult] = useState<Record<string, unknown> | null>(null);
+
+  const [resolvingFlagId, setResolvingFlagId] = useState<string | null>(null);
+  const [resolutionText, setResolutionText] = useState("");
 
   const activeUser = useMemo(() => bootstrap?.users.find((user) => user.id === userId), [bootstrap, userId]);
   const loginUser = useMemo(() => bootstrap?.users.find((user) => user.id === loginUserId), [bootstrap, loginUserId]);
@@ -571,6 +557,23 @@ export default function Home() {
     if (result) {
       setProposal(result);
       setCommitResult(null);
+    }
+  }
+
+  async function resolveFlag(flagId: string) {
+    if (!resolutionText.trim()) return;
+    const result = await runAction(
+      () =>
+        api<Record<string, unknown>>("/api/outliers/resolve", {
+          method: "POST",
+          body: JSON.stringify({ flag_id: flagId, resolution: resolutionText })
+        }),
+      "Flag resolved"
+    );
+    if (result) {
+      setResolvingFlagId(null);
+      setResolutionText("");
+      refresh().catch(() => undefined);
     }
   }
 
@@ -1072,7 +1075,43 @@ export default function Home() {
                         {flag.status} · {flag.table_name} · {flag.owner_team} · {flag.created_by} · {dateLabel(flag.created_at)}
                       </small>
                       {flag.resolution && <p className="flag-resolution">↳ {flag.resolution}</p>}
+                      {resolvingFlagId === flag.id && (
+                        <div className="resolve-form">
+                          <input
+                            value={resolutionText}
+                            onChange={(event) => setResolutionText(event.target.value)}
+                            onKeyDown={(event) => {
+                              if (event.key === "Enter") resolveFlag(flag.id).catch(() => undefined);
+                            }}
+                            placeholder="Resolution note..."
+                            autoFocus
+                          />
+                          <button
+                            className="primary compact"
+                            type="button"
+                            onClick={() => resolveFlag(flag.id)}
+                            disabled={loading || !resolutionText.trim()}
+                            title="Confirm resolution"
+                          >
+                            <Check size={15} />
+                          </button>
+                        </div>
+                      )}
                     </div>
+                    {flag.status !== "resolved" && resolvingFlagId !== flag.id && (
+                      <button
+                        className="secondary compact"
+                        type="button"
+                        onClick={() => {
+                          setResolvingFlagId(flag.id);
+                          setResolutionText("");
+                        }}
+                        title="Resolve flag"
+                      >
+                        <Check size={15} />
+                        Resolve
+                      </button>
+                    )}
                   </div>
                 ))}
                 {!(bootstrap?.history.flags ?? []).length && (

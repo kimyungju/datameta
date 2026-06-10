@@ -91,7 +91,7 @@ Query "What are our incident severity levels?" returns an answer. If yes, you're
 - **Authoring:** **Author** tab → drafts a knowledge proposal and checks it for
   conflicts before committing.
 - **MCP:** The same brain is exposed as an MCP server at
-  `http://127.0.0.1:8000/mcp` (12 tools). An agent calling `datameta_ask` gets
+  `http://127.0.0.1:8000/mcp` (16 tools). An agent calling `datameta_ask` gets
   the *same* ARR pause — "this isn't just a UI, it's an agent-ready tool."
 
 ---

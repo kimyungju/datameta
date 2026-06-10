@@ -194,6 +194,61 @@ class DataMetaServiceTest(unittest.TestCase):
         self.assertIn("datameta_read_markdown_file", tools)
         self.assertEqual(["question"], tools["datameta_multirepo_query"]["inputSchema"]["required"])
 
+    def test_mcp_lists_every_dispatchable_tool_and_no_pipeline(self) -> None:
+        listed = {tool["name"] for tool in mcp_tools()}
+        # The calculation/flag tools must be discoverable: datameta_ask's ARR
+        # pause tells the agent to call datameta_run_calculation next.
+        self.assertIn("datameta_prepare_calculation", listed)
+        self.assertIn("datameta_run_calculation", listed)
+        self.assertIn("datameta_flag_outlier", listed)
+        self.assertIn("datameta_resolve_flag", listed)
+        self.assertNotIn("datameta_run_pipeline", listed)
+
+    def test_mcp_arr_conflict_flow_is_completable_end_to_end(self) -> None:
+        with TestClient(app) as client:
+            ask = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {
+                        "name": "datameta_ask",
+                        "arguments": {"question": "Help me calculate ARR for ASEAN", "user_id": "ops.associate"},
+                    },
+                },
+            )
+            self.assertEqual(200, ask.status_code)
+            pause = ask.json()["result"]["structuredContent"]
+            self.assertEqual("choose_definition", pause["intent"])
+            listed = {tool["name"] for tool in mcp_tools()}
+            self.assertIn(pause["action"], listed)
+            definition = next(d for d in pause["definitions"] if d["id"] == "arr-finance-board")
+            run = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 2,
+                    "method": "tools/call",
+                    "params": {
+                        "name": pause["action"],
+                        "arguments": {
+                            "definition_id": definition["id"],
+                            "table": definition["accessible_tables"][0]["table"],
+                            "user_id": "ops.associate",
+                        },
+                    },
+                },
+            )
+            self.assertEqual(200, run.status_code)
+            calculation = run.json()["result"]["structuredContent"]
+            self.assertEqual(684000.0, calculation["result"]["value"])
+
+    def test_pipeline_endpoint_is_removed(self) -> None:
+        with TestClient(app) as client:
+            response = client.post("/api/pipeline/run", json={"runbook_id": "gmv-category-ranker"})
+        self.assertEqual(404, response.status_code)
+
     def test_mcp_initialized_notification_returns_accepted_without_body(self) -> None:
         with TestClient(app) as client:
             response = client.post(
