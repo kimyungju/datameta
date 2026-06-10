@@ -56,11 +56,12 @@ Query "What are our incident severity levels?" returns an answer. If yes, you're
 ### Act 3 — Multi-repo synthesis (Query tab) · *user: Ada Admin*
 - **Query** → type:
   **"Customer A says we missed their SLA during the Vendor X outage. What should we do?"**
-- **Say:** "This needs four teams at once — Legal for the SLA terms, Platform Ops
-  for the measured 99.62% availability and postmortem, Vendor Risk for the
-  Vendor X RCA, Customer Success for the escalation. It stitches them together
-  and cites every source. If the docs don't support an answer, it says so rather
-  than inventing one."
+- **Say:** "This needs several teams at once — Legal for the 99.90% SLA terms,
+  Platform Ops for the measured 99.62% availability and the incident record,
+  Customer Success for the complaint and escalation playbook, Vendor Risk for
+  the Vendor X RCA, Data Governance for the evidence pack. It stitches them
+  together and cites every source. If the docs don't support an answer, it says
+  so rather than inventing one."
 
 ### Act 4 — ⭐ The conflict (the headline) · *user: Olivia Operations Associate*
 - **Switch user** → sign in as **Olivia Operations Associate** (`ops.associate`).

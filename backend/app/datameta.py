@@ -566,7 +566,7 @@ class DataMetaService:
             db.executemany(
                 "INSERT INTO sla_availability VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    ("Customer A", "2026-05", 99.72, 99.90, 15.0, "inc-vendor-x-2026-05-20", "platform-operations"),
+                    ("Customer A", "2026-05", 99.62, 99.90, 15.0, "inc-vendor-x-2026-05-20", "platform-operations"),
                     ("Customer B", "2026-05", 99.96, 99.50, 10.0, "inc-vendor-x-2026-05-20", "platform-operations"),
                     ("Customer C", "2026-05", 99.91, 99.90, 0.0, None, "platform-operations"),
                 ],
@@ -574,17 +574,17 @@ class DataMetaService:
             db.executemany(
                 "INSERT INTO incident_events VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    ("evt-001", "inc-vendor-x-2026-05-20", "2026-05-20T14:05:00+00:00", "Customer A", "public-api", "Elevated 5xx errors begin", "platform-operations"),
-                    ("evt-002", "inc-vendor-x-2026-05-20", "2026-05-20T14:11:00+00:00", None, "session-service", "Vendor X health check failure confirmed", "platform-operations"),
-                    ("evt-003", "inc-vendor-x-2026-05-20", "2026-05-20T16:40:00+00:00", "Customer A", "public-api", "Customer A traffic restored", "platform-operations"),
+                    ("evt-001", "inc-vendor-x-2026-05-20", "2026-05-20T09:12:00+00:00", "Customer A", "public-api", "Elevated 5xx errors begin", "platform-operations"),
+                    ("evt-002", "inc-vendor-x-2026-05-20", "2026-05-20T09:25:00+00:00", None, "session-service", "Vendor X confirmed as the source", "platform-operations"),
+                    ("evt-003", "inc-vendor-x-2026-05-20", "2026-05-20T12:20:00+00:00", "Customer A", "public-api", "Customer A traffic restored", "platform-operations"),
                     ("evt-004", "inc-vendor-y-2026-04-11", "2026-04-11T03:10:00+00:00", "Customer B", "billing-export", "Vendor Y export delay", "platform-operations"),
                 ],
             )
             db.executemany(
                 "INSERT INTO vendor_events VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    ("vend-001", "Vendor X", "inc-vendor-x-2026-05-20", "2026-05-20T14:07:00+00:00", "sev-1", "Vendor X identity region had degraded token validation.", "vendor-risk-management"),
-                    ("vend-002", "Vendor X", "inc-vendor-x-2026-05-20", "2026-05-20T17:30:00+00:00", "sev-1", "Vendor X delivered preliminary restoration note.", "vendor-risk-management"),
+                    ("vend-001", "Vendor X", "inc-vendor-x-2026-05-20", "2026-05-20T09:25:00+00:00", "sev-2", "Vendor X regional failover failed to trigger, degrading token validation.", "vendor-risk-management"),
+                    ("vend-002", "Vendor X", "inc-vendor-x-2026-05-20", "2026-05-20T13:30:00+00:00", "sev-2", "Vendor X delivered preliminary restoration note.", "vendor-risk-management"),
                     ("vend-003", "Vendor Y", "inc-vendor-y-2026-04-11", "2026-04-11T04:00:00+00:00", "sev-3", "Vendor Y delayed non-production export.", "vendor-risk-management"),
                 ],
             )
@@ -734,6 +734,8 @@ class DataMetaService:
             return "---\n" + "\n".join(f"{key}: {value}" for key, value in fields.items()) + "\n---\n"
 
         def add_metadata(path: str, fields: dict[str, str], heading: str, body: str) -> None:
+            if path in files:
+                raise ValueError(f"duplicate seed path: {path}")
             files[path] = f"{front_matter(fields)}# {heading}\n\n{body.strip()}\n"
 
         for repo, meta in repos.items():
@@ -950,81 +952,6 @@ Customer A must receive a preliminary incident explanation within three business
         )
 
         add_doc(
-            "platform-operations",
-            "incidents",
-            "vendor-x-2026-05-availability-incident.md",
-            doc_id="inc-vendor-x-2026-05-20",
-            doc_type="incident",
-            entity="Vendor X Availability Incident",
-            scope="availability_incident",
-            title="Vendor X Availability Incident on 2026-05-20",
-            summary="Vendor X token validation degradation caused elevated public API errors for Customer A from 14:05 to 16:40 UTC.",
-            customers="Customer A",
-            vendors="Vendor X",
-            slas="availability-sla",
-            incidents="inc-vendor-x-2026-05-20",
-            tags="Vendor X,Customer A,availability incident,public API,5xx",
-            body="""
-## Timeline
-
-At 2026-05-20 14:05 UTC, public API error rates rose for Customer A traffic. At 14:11 UTC, Platform Operations linked the error pattern to Vendor X token validation failures. Customer A traffic returned to normal at 16:40 UTC.
-
-## Impact
-
-Customer A experienced elevated 5xx responses on production API calls. Customer B and Customer C did not have production API SLA impact from this event.
-
-## Operational Finding
-
-The incident duration counted toward Customer A production API availability because the affected path was customer-facing and not scheduled maintenance.
-""",
-        )
-        add_doc(
-            "platform-operations",
-            "slo-measurement",
-            "customer-a-may-2026-availability.md",
-            doc_id="customer-a-may-2026-availability",
-            doc_type="evidence",
-            entity="Customer A May 2026 Availability",
-            scope="sla_measurement",
-            title="Customer A May 2026 Availability Measurement",
-            summary="Customer A measured 99.72 percent production API availability in May 2026 after including the Vendor X incident.",
-            customers="Customer A",
-            vendors="Vendor X",
-            slas="availability-sla",
-            incidents="inc-vendor-x-2026-05-20",
-            tags="Customer A,availability measurement,99.72,Vendor X",
-            body="""
-## Result
-
-Customer A's May 2026 production API availability measured 99.72 percent after excluding 15 minutes of approved scheduled maintenance.
-
-## Treatment of Vendor X
-
-The Vendor X incident was included in the availability numerator and denominator treatment because Vendor X is not excluded in Customer A's approved dependency schedule.
-
-## Evidence Linkage
-
-The measurement references incident inc-vendor-x-2026-05-20 and the public API error-rate logs retained by Data Governance.
-""",
-        )
-        add_doc(
-            "platform-operations",
-            "postmortems",
-            "vendor-x-corrective-actions.md",
-            doc_id="vendor-x-corrective-actions",
-            doc_type="postmortem",
-            entity="Vendor X Corrective Actions",
-            scope="postmortem",
-            title="Vendor X Corrective Actions",
-            summary="Platform Operations will add token validation fallback and dependency health alarms after the Vendor X incident.",
-            customers="Customer A",
-            vendors="Vendor X",
-            incidents="inc-vendor-x-2026-05-20",
-            tags="Vendor X,corrective action,postmortem",
-            body="Corrective actions include dependency brownout alarms, token validation fallback, and a synthetic Customer A canary path that bypasses cached status pages.",
-        )
-
-        add_doc(
             "customer-success-ops",
             "customer-a",
             "customer-a-complaint-2026-05.md",
@@ -1100,12 +1027,12 @@ The measurement references incident inc-vendor-x-2026-05-20 and the public API e
             entity="Vendor X",
             scope="risk_register",
             title="Vendor X Risk Register",
-            summary="Vendor X is a Tier 1 identity and token validation provider with five-business-day RCA duties after a Sev-1 outage.",
+            summary="Vendor X is a Tier 1 identity and token validation provider with five-business-day RCA duties after any availability-impacting incident.",
             customers="Customer A,Customer B",
             vendors="Vendor X",
             incidents="inc-vendor-x-2026-05-20",
             tags="Vendor X,Tier 1,RCA,contractual obligation",
-            body="Vendor X is Tier 1 because production API authentication depends on its token validation service. After a Sev-1 incident, Vendor X must provide preliminary facts within one business day and a contractual RCA within five business days.",
+            body="Vendor X is Tier 1 because production API authentication depends on its token validation service. After any availability-impacting incident, Vendor X must provide preliminary facts within one business day and a contractual RCA within five business days.",
         )
         add_doc(
             "vendor-risk-management",
@@ -2877,6 +2804,20 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
                     },
                 }
             )
+        # The markdown repository is the source of truth: prune synced nodes
+        # whose source no longer exists so deletions propagate to Neo4j.
+        for label, ids in (
+            ("Repository", [item["id"] for item in index["repositories"].values()]),
+            ("Folder", [item["id"] for item in index["folders"].values()]),
+            ("Document", [item["id"] for item in index["files"].values()]),
+            ("Chunk", [chunk["id"] for chunk in index["chunks"]]),
+        ):
+            statements.append(
+                {
+                    "statement": f"MATCH (n:{label}) WHERE NOT n.id IN $ids DETACH DELETE n",
+                    "parameters": {"ids": ids},
+                }
+            )
         return statements
 
     def _sync_multirepo_index_to_neo4j(self, index: dict[str, Any]) -> dict[str, Any]:
@@ -2986,6 +2927,48 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             score = self._score_item(query, query_embedding, item)
             if score["score"] >= minimum_score:
                 scored.append({**item, "hybrid": score})
+        scored.sort(key=lambda value: value["hybrid"]["score"], reverse=True)
+        return scored[:limit]
+
+    def _rank_repositories(
+        self,
+        query: str,
+        query_embedding: list[float],
+        index: dict[str, Any],
+        repo_items: list[dict[str, Any]],
+        *,
+        limit: int,
+        minimum_score: float = 1.0,
+    ) -> list[dict[str, Any]]:
+        # Repository metadata is intentionally broad, so metadata-only scores
+        # cluster tightly. Blend in the strongest file-level evidence inside
+        # each repository so routing follows where answers actually live.
+        # A single stray token match scores well below 3.0; requiring it keeps
+        # weak overlap from carrying an otherwise irrelevant repository over
+        # the shortlist gate.
+        minimum_file_evidence = 3.0
+        allowed_repos = {item["repository"] for item in repo_items}
+        best_file_score: dict[str, float] = {}
+        for file_item in index["files"].values():
+            repo = file_item["repository"]
+            if repo not in allowed_repos:
+                continue
+            file_score = self._score_item(query, query_embedding, file_item)["score"]
+            if file_score >= minimum_file_evidence and file_score > best_file_score.get(repo, 0.0):
+                best_file_score[repo] = file_score
+        scored = []
+        for item in repo_items:
+            own = self._score_item(query, query_embedding, item)
+            evidence = best_file_score.get(item["repository"], 0.0)
+            combined = round((own["score"] + evidence) / 2.0, 4)
+            if combined >= minimum_score:
+                hybrid = {
+                    **own,
+                    "score": combined,
+                    "metadata_score": own["score"],
+                    "best_file_score": round(evidence, 4),
+                }
+                scored.append({**item, "hybrid": hybrid})
         scored.sort(key=lambda value: value["hybrid"]["score"], reverse=True)
         return scored[:limit]
 
@@ -3264,7 +3247,46 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             allowed = set(teams)
             vector_rows = [r for r in vector_rows if r.get("team") in allowed]
             chunk_rows = [r for r in chunk_rows if r.get("team") in allowed]
-        return {"source": "neo4j_hybrid", "evidence": self._merge_hybrid_rows(vector_rows, chunk_rows, limit)}
+        # Return a wider candidate pool; the caller filters and re-ranks it
+        # against the local index before truncating to `limit`.
+        return {
+            "source": "neo4j_hybrid",
+            "limit": limit,
+            "evidence": self._merge_hybrid_rows(vector_rows, chunk_rows, limit * 2),
+        }
+
+    def _blend_neo4j_evidence_with_local(
+        self,
+        query: str,
+        query_embedding: list[float],
+        evidence: list[dict[str, Any]],
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        # Neo4j metadata-embedding scores cluster tightly, so blend in the
+        # local hybrid score (keyword + entity phrase signal) of the mirrored
+        # document to rank decisive evidence above loosely related documents.
+        index = self._multirepo_index
+        local_scores: dict[str, float] = {}
+        for item in evidence:
+            file_item = index["files"].get(item.get("path", "")) if index else None
+            if file_item:
+                local_scores[item["path"]] = self._score_item(query, query_embedding, file_item)["score"]
+        local_best = max(local_scores.values(), default=0.0)
+        if local_best > 0:
+            for item in evidence:
+                local_score = local_scores.get(item.get("path", ""), 0.0)
+                item["score"] = round(0.5 * item["score"] + 0.5 * (local_score / local_best), 4)
+            evidence = sorted(evidence, key=lambda value: value["score"], reverse=True)
+        return evidence[:limit]
+
+    def _evidence_supports_query(self, query: str, item: dict[str, Any]) -> bool:
+        index = self._multirepo_index
+        file_item = index["files"].get(item.get("path", "")) if index else None
+        if not file_item:
+            # Unknown to the local mirror (e.g. Neo4j-only document): keep it,
+            # the local corpus cannot rule on it.
+            return True
+        return self._doc_directly_supports_query(query, file_item["doc"])
 
     def _local_evidence_from_findings(self, findings, shortlisted_files):
         hybrid_by_path = {item["path"]: (item.get("hybrid") or {}) for item in shortlisted_files}
@@ -3288,7 +3310,7 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
         query_embeddings, query_embedding_status = self._embed_texts([query])
         query_embedding = query_embeddings[0]
         repo_items = [item for item in index["repositories"].values() if user.can_read_team(item["doc"]["team"])]
-        shortlisted_repositories = self._rank_items(query, query_embedding, repo_items, limit=4, minimum_score=1.0)
+        shortlisted_repositories = self._rank_repositories(query, query_embedding, index, repo_items, limit=4, minimum_score=1.0)
         folder_candidates: list[dict[str, Any]] = []
         for repo_item in shortlisted_repositories:
             folders = [
@@ -3334,6 +3356,17 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             for file_payload in folder["selected_files"]
         ]
         neo4j_retrieval = self._neo4j_hybrid_retrieve(user, query, query_embedding)
+        if neo4j_retrieval and neo4j_retrieval.get("evidence"):
+            # Apply the same no-guessing entity filter used for local findings,
+            # so e.g. a Customer C document is not cited for a Customer A query.
+            supported = [
+                item
+                for item in neo4j_retrieval["evidence"]
+                if self._evidence_supports_query(query, item)
+            ]
+            neo4j_retrieval["evidence"] = self._blend_neo4j_evidence_with_local(
+                query, query_embedding, supported, neo4j_retrieval.get("limit", 8)
+            )
         if neo4j_retrieval and neo4j_retrieval.get("evidence"):
             retrieval = neo4j_retrieval
             retrieval_source = "neo4j_hybrid"

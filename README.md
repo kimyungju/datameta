@@ -1,14 +1,14 @@
 # DataMeta
 
-DataMeta is a localhost MVP for Shoppy, an e-commerce analytics and operations company.
+DataMeta is a localhost MVP of a knowledge layer over an enterprise's markdown repositories. The seeded demo corpus covers six incident-knowledge repos (security, legal, customer success, platform operations, vendor risk, data governance) plus three metric-definition repos (finance, renewals, sales).
 
 It demonstrates:
 
 - Git-versioned markdown knowledge for team-specific definitions and runbooks.
-- RBAC over team folders and warehouse tables.
-- ARR calculation disambiguation between Finance and Renewals definitions.
+- RBAC over team repositories and warehouse tables.
+- Multi-repo retrieval with citations (repository → folder → file funnel, hybrid local/Neo4j ranking).
+- ARR calculation disambiguation: when the Finance, Renewals, and Sales definitions conflict, the app pauses and asks which one to use instead of guessing.
 - Cross-team outlier flagging and owner resolution.
-- Reusable analytics runbooks that produce chart and table outputs.
 - A FastAPI REST API plus a Codex-compatible MCP JSON-RPC endpoint.
 
 ## Run

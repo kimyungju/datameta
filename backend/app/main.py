@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from contextlib import asynccontextmanager
+from typing import Any, AsyncIterator
 
 from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +13,14 @@ from .datameta import DataMetaService
 
 service = DataMetaService()
 
-app = FastAPI(title="DataMeta", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    service.ensure_ready()
+    yield
+
+
+app = FastAPI(title="DataMeta", version="0.1.0", lifespan=lifespan)
 
 
 def allowed_origins() -> list[str]:
@@ -30,11 +38,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.on_event("startup")
-def startup() -> None:
-    service.ensure_ready()
 
 
 @app.get("/")

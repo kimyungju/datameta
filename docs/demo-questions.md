@@ -33,9 +33,10 @@ everything) or **Jamie Incident Analyst**.
 Requires synthesis across repos. Sign in as **Ada Admin** or **Jamie**.
 
 - **"Customer A says we missed their SLA during the Vendor X outage. What should we do?"**
-  Pulls legal (SLA terms) + platform-operations (incident + 99.62% measured
-  availability + postmortem) + vendor-risk (Vendor X RCA) + security
-  (customer notice) + data-governance (evidence pack).
+  Pulls legal (99.90% SLA terms) + platform-operations (incident + 99.62%
+  measured availability) + customer-success (complaint + escalation playbook)
+  + vendor-risk (Vendor X RCA) + security (customer notice) + data-governance
+  (evidence pack).
 
 ## 3. ⭐ Cross-repo CONFLICT — the headline demo
 
