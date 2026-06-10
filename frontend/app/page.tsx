@@ -1060,6 +1060,26 @@ export default function Home() {
                 ))}
               </div>
             </div>
+            <div>
+              <h3><AlertTriangle size={18} /> Flags</h3>
+              <div className="list">
+                {(bootstrap?.history.flags ?? []).map((flag) => (
+                  <div className="flag-row" key={flag.id}>
+                    <div>
+                      <strong>{flag.subject}</strong>
+                      <p>{flag.description}</p>
+                      <small>
+                        {flag.status} · {flag.table_name} · {flag.owner_team} · {flag.created_by} · {dateLabel(flag.created_at)}
+                      </small>
+                      {flag.resolution && <p className="flag-resolution">↳ {flag.resolution}</p>}
+                    </div>
+                  </div>
+                ))}
+                {!(bootstrap?.history.flags ?? []).length && (
+                  <Empty icon={<AlertTriangle size={22} />} label="No data-quality flags yet" />
+                )}
+              </div>
+            </div>
           </section>
         )}
       </section>

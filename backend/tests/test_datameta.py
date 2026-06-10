@@ -378,7 +378,7 @@ class DataMetaServiceTest(unittest.TestCase):
         def fake(statement, parameters=None):
             self.assertIn("admin", parameters)
             self.assertIn("teams", parameters)
-            if "db.index.vector.queryNodes" in statement:
+            if "VECTOR INDEX datameta_document_embedding" in statement:
                 return vector_rows
             if "db.index.fulltext.queryNodes" in statement:
                 return chunk_rows

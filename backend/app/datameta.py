@@ -3230,8 +3230,11 @@ Captured by DataMeta from natural language and awaiting analyst confirmation.
             return None
         is_admin = user.is_admin
         teams = list(user.read_teams)
+        # Cypher 25 SEARCH clause; db.index.vector.queryNodes is deprecated.
         vector_rows = self._neo4j_read(
-            "CALL db.index.vector.queryNodes('datameta_document_embedding', $k, $vec) YIELD node, score "
+            "CYPHER 25 "
+            "MATCH (node:Document) "
+            "SEARCH node IN (VECTOR INDEX datameta_document_embedding FOR $vec LIMIT $k) SCORE AS score "
             "MATCH (node)-[:OWNED_BY]->(t:Team) WHERE $admin OR t.name IN $teams "
             "RETURN node.id AS document_id, node.path AS path, node.title AS title, node.summary AS summary, "
             "t.name AS team, score AS score",
