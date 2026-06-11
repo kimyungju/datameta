@@ -3797,6 +3797,8 @@ Resolution:
         }
 
     def mcp_tool_names(self) -> list[str]:
+        # Must stay in sync with mcp_tools() in app/main.py —
+        # enforced by tests/test_mcp_contract.py.
         return [
             "datameta_ask",
             "datameta_retrieve",
@@ -3809,6 +3811,10 @@ Resolution:
             "datameta_author_proposal",
             "datameta_validate_proposal",
             "datameta_commit_proposal",
+            "datameta_prepare_calculation",
+            "datameta_run_calculation",
+            "datameta_flag_outlier",
+            "datameta_resolve_flag",
             "datameta_history",
         ]
 
