@@ -116,3 +116,21 @@ and tested (`backend/tests/test_mcp_contract.py`):
 The contract tests also pin registry consistency: every tool listed by
 `tools/list` is dispatchable, every dispatchable tool is listed, and the
 bootstrap payload advertises the same 16 tools as the server.
+
+## MCP observability
+
+Every MCP tool call is instrumented (`backend/app/observability.py`): the
+server records the tool name, caller `user_id`, latency, success/error, and
+whether the call was a write. This is the runtime counterpart to the contract
+tests — they pin the tool *surface*, this records the tool *traffic*.
+
+- **Live stats** — `GET /api/telemetry` returns per-tool call counts, error
+  rate, p50/p95 latency, write-call count, and the most recent calls.
+- **Durable audit** — set `DATAMETA_TELEMETRY_LOG=/path/to/audit.jsonl` to
+  also append every call as a JSON Lines row.
+- **Zero-config** — telemetry is an in-memory bounded ring by default, so it
+  never grows without bound and adds no external dependency. A telemetry write
+  failure can never break a tool call.
+
+Together with the Git audit trail (`datameta_history`), this answers "who
+called what, when, and did it succeed" for the whole MCP surface.

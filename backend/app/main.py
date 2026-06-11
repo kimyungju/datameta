@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from .datameta import DataMetaService
+from .observability import instrument, recorder
 
 
 service = DataMetaService()
@@ -271,6 +272,14 @@ def history(path: str | None = None, x_user_id: str | None = Header(default=None
         return service.history(path, x_user_id)
     except Exception as error:
         raise handle_error(error)
+
+
+@app.get("/api/telemetry")
+def telemetry(limit: int = 50) -> dict[str, Any]:
+    """MCP tool-call observability: per-tool counts, error rate, latency, and
+    the most recent calls. Powers an ops view and makes the agent's tool
+    traffic auditable."""
+    return {"summary": recorder.summary(), "recent": recorder.recent(limit)}
 
 
 def mcp_tools() -> list[dict[str, Any]]:
@@ -588,7 +597,10 @@ async def mcp(request: Request) -> dict[str, Any] | Response:
             result = {"tools": mcp_tools()}
         elif method == "tools/call":
             params = message.get("params", {})
-            payload = dispatch_tool(params["name"], params.get("arguments") or {})
+            tool_name = params["name"]
+            arguments = params.get("arguments") or {}
+            with instrument(tool_name, arguments):
+                payload = dispatch_tool(tool_name, arguments)
             result = mcp_text_result(payload)
         elif method in {"notifications/initialized", "initialized"}:
             return Response(status_code=202)
